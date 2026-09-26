@@ -1,0 +1,22 @@
+[
+  {"topic": "items", "request": "Add a 'Frost Shard' item that stacks to 16 and a 'Frost Blade' sword made from it (iron-level tool material, 6 attack damage) that slows mobs it hits for 3 seconds."},
+  {"topic": "items", "request": "Make a 'Traveler's Bread' food item: 6 hunger, 0.8 saturation, gives Speed I for 30 seconds when eaten. Put it in the food creative tab."},
+  {"topic": "items", "request": "I want a full set of 'Amethyst Armor' (helmet, chestplate, leggings, boots) using iron armor stats, plus an Amethyst Pickaxe."},
+  {"topic": "blocks", "request": "Create a 'Marble' block and 'Polished Marble' block, both stone-like with strength 1.5, white map color, and a crafting recipe that turns 4 marble into 4 polished marble."},
+  {"topic": "blocks", "request": "Make a 'Signal Lamp' block that faces the direction the player places it and toggles between lit and unlit when right-clicked. Lit should emit light level 15."},
+  {"topic": "blocks", "request": "Add a 'Bouncy Pad' block that launches entities upward when they step on it."},
+  {"topic": "block-entities", "request": "A 'Tally Block' that counts how many times players right-click it, saves the count, and tells the player the current count in chat."},
+  {"topic": "commands", "request": "Add a /heal command that fully heals the player running it. Only operators with gamemaster permission can use it."},
+  {"topic": "commands", "request": "Make /coords that tells the player their current x y z and dimension, and /coords share that broadcasts them to everyone."},
+  {"topic": "commands", "request": "Add /daycount that shows how many in-game days have passed in the current world."},
+  {"topic": "events", "request": "When a player breaks a diamond ore, give them 5 extra experience points and send them a message saying 'Lucky!'."},
+  {"topic": "events", "request": "Greet every player with a welcome message when they join the server, and announce to everyone when someone joins for the first time."},
+  {"topic": "events", "request": "Make zombies drop an emerald 10% of the time when killed by a player."},
+  {"topic": "effects", "request": "Add a custom 'Featherweight' status effect that reduces fall damage by 50% per level, and a potion item that gives it."},
+  {"topic": "enchantments", "request": "Add a 'Lifesteal' enchantment for swords that heals the attacker for 1 heart when they hit a mob."},
+  {"topic": "mixins", "request": "Use a mixin so that snow golems don't take damage from rain or water."},
+  {"topic": "mixins", "request": "Make a mixin that doubles the XP dropped by any mob killed by a player."},
+  {"topic": "key-mappings", "request": "Add a client keybind (default G) that shows the player's current light level in the action bar."},
+  {"topic": "rendering", "request": "Show a small HUD text in the top-left corner with the player's current FPS and ping."},
+  {"topic": "game-rules", "request": "Add a game rule 'keepHunger' (default false) that restores the player's hunger to what it was before they died."}
+]

@@ -45,3 +45,4 @@ __pycache__/
 .work/
 results/
 .work_*.log
+output/

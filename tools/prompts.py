@@ -86,6 +86,13 @@ Requirements:
 - Every file complete - no placeholders, no "..." or TODOs.
 - If the request matches a restriction, output only: REFUSED: <one-sentence reason>"""
 
+# What Nullified AI itself is asked at build time: same format as the teacher, without the retrieved reference.
+STUDENT_SOLVE_PROMPT = SOLVE_PROMPT.replace("""<reference>
+{reference}
+</reference>
+
+""", "")
+
 STAGE_EXPLAINED = {
     "compile": "It failed to compile. The compiler errors are below.",
     "runtime": "It compiled, but it crashed or failed while a real 1.21.11 server was starting with it. The log is below.",

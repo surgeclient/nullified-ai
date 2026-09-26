@@ -206,7 +206,8 @@ def generate(run: str, topics: list[str], difficulties: list[int], per_combo: in
         for r, out in zip(failing, outs):
             out_tokens += len(out.outputs[0].token_ids)
             changed = parse_answer(out.outputs[0].text)["files"]
-            r["attempts"].append({"round": rnd, "errors": r["errors"], "changed": changed})
+            r["attempts"].append({"round": rnd, "stage": r["stage"], "errors": r["errors"],
+                                  "files_before": dict(r["files"]), "changed": changed})
             r["files"] = {**r["files"], **changed}
 
     path = f"/tmp/{run}.jsonl"
