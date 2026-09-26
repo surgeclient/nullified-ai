@@ -44,3 +44,4 @@ __pycache__/
 *.pyc
 .work/
 results/
+.work_*.log

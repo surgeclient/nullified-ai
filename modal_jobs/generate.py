@@ -24,9 +24,10 @@ GPU = "H100"
 app = modal.App("nullified-ai-generate")
 cache = modal.Volume.from_name("nullified-cache", create_if_missing=True)
 image = (
-    modal.Image.debian_slim(python_version="3.12")
+    # CUDA devel image: vLLM JIT-compiles some kernels at startup and needs nvcc + headers.
+    modal.Image.from_registry("nvidia/cuda:13.0.2-devel-ubuntu24.04", add_python="3.12")
     .pip_install("vllm", "huggingface_hub")
-    .env({"HF_HOME": "/cache/hf", "VLLM_LOGGING_LEVEL": "WARNING"})
+    .env({"HF_HOME": "/cache/hf", "VLLM_LOGGING_LEVEL": "WARNING", "CUDA_HOME": "/usr/local/cuda"})
     .add_local_dir("tools", "/root/tools")
     .add_local_file("restrictions.txt", "/root/restrictions.txt")
 )
@@ -34,6 +35,16 @@ image = (
 
 def hf_user(api) -> str:
     return api.whoami()["name"]
+
+
+@app.function(image=image, volumes={"/cache": cache}, timeout=3600, cpu=2,
+              secrets=[modal.Secret.from_name("huggingface")])
+def prefetch_teacher() -> str:
+    """Download the teacher weights on a cheap CPU container so the GPU never waits on downloads."""
+    from huggingface_hub import snapshot_download
+    path = snapshot_download(TEACHER, cache_dir="/cache/hf", token=os.environ["HF_TOKEN"])
+    cache.commit()
+    return path
 
 
 @app.function(image=image, gpu=GPU, volumes={"/cache": cache}, timeout=6 * 3600,
@@ -56,8 +67,8 @@ def generate(run: str, topics: list[str], difficulties: list[int], per_combo: in
     index = ReferenceIndex.load(f"{ref_dir}/{VERSION}", VERSION)
 
     llm = LLM(model=TEACHER, max_model_len=32768, gpu_memory_utilization=0.92,
-              download_dir="/cache/hf", seed=seed)
-    cache.commit()  # keep downloaded weights for next time
+              download_dir="/cache/hf", seed=seed,
+              max_num_seqs=256)  # hybrid (Mamba) model: one cache block per sequence
     chat_kwargs = {"enable_thinking": thinking}
     system = system_prompt(VERSION)
 
@@ -133,4 +144,5 @@ def main(run: str, topics: str = "", difficulties: str = "1,2,3", per_combo: int
     diffs = [int(d) for d in difficulties.split(",")]
     print(f"run={run}: {len(topic_list)} topics x {len(diffs)} difficulties x {per_combo} = "
           f"up to {len(topic_list) * len(diffs) * per_combo} mods on {GPU} with {TEACHER}")
+    print("teacher weights:", prefetch_teacher.remote())
     print(json.dumps(generate.remote(run, topic_list, diffs, per_combo, seed, thinking), indent=2))
