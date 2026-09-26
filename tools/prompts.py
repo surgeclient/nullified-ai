@@ -5,8 +5,11 @@ The teacher answers in a fixed format so every answer can be split into
   FILES -> training data for the Coder / Mixin / Assets specialists (and gets compile-checked)
 """
 import re
+from pathlib import Path
 
 from restrictions import restrictions_prompt
+
+CHEATSHEETS = Path(__file__).resolve().parent / "cheatsheet"
 
 # Topics come from the Fabric docs sections; each has a few example ideas to steer variety.
 TOPICS = {
@@ -45,7 +48,9 @@ Rules:
 - Never use deprecated Fabric API modules.
 - The project uses split source sets: common code in src/main/java, client-only code in src/client/java
   (client entrypoint, renderers, screens, key bindings, client mixins).
-{restrictions}"""
+{restrictions}
+
+{cheatsheet}"""
 
 REQUEST_PROMPT = """Write {n} different, realistic requests that a Minecraft player or modder might send to an AI
 that builds Fabric mods. Topic: {topic} ({topic_hint}). Size: {difficulty}.
@@ -95,11 +100,11 @@ FIX_PROMPT = """This Fabric mod for Minecraft {version} failed to compile.
 {errors}
 </compiler_errors>
 
-<reference>
-{reference}
-</reference>
+<facts>
+{hints}
+</facts>
 
-Fix every error. Output ONLY the files you change, each COMPLETE, in this format:
+Fix every error. Keep the mod's features the same. Output ONLY the files you change, each COMPLETE, in this format:
 === FILE: <path> ===
 <complete file contents>
 === END FILE ==="""
@@ -109,7 +114,9 @@ SAFE_PATH = re.compile(r"^src/(main|client)/(java|resources)/[\w./\-]+$")
 
 
 def system_prompt(version: str) -> str:
-    return SYSTEM.format(version=version, restrictions=restrictions_prompt())
+    sheet = CHEATSHEETS / f"{version}.md"
+    cheatsheet = sheet.read_text(encoding="utf-8") if sheet.exists() else ""
+    return SYSTEM.format(version=version, restrictions=restrictions_prompt(), cheatsheet=cheatsheet)
 
 
 def parse_answer(text: str) -> dict:

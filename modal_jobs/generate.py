@@ -1,13 +1,14 @@
-"""Generate training mods with an open-weight teacher running on Modal (vLLM).
+"""Generate compile-verified training mods on Modal.
 
-Stage 1: the teacher writes realistic mod requests for each topic x difficulty.
-Stage 2: for each request, it writes a PLAN + all mod files, grounded in 1.21.11 reference material.
-Output: raw/<run>.jsonl in the private HF dataset <you>/nullified-ai-data (compile-checked later on GitHub).
+  1. Teacher (vLLM on one GPU) writes mod requests for each topic x difficulty.
+  2. Teacher writes PLAN + all files for each request, grounded in 1.21.11 reference material + cheat sheet.
+  3. CPU workers (warm Gradle + Loom, many in parallel) compile every mod against the real 1.21.11 template.
+  4. Failures go back to the teacher with the compiler errors + real signatures of the classes involved.
+     Repeats up to --fix-rounds times. Every attempt is kept (Fixer training data).
+Output: raw/<run>.jsonl in the private HF dataset <you>/nullified-ai-data.
 
-Smoke test (~6 mods, roughly $1):
-    python -m modal run modal_jobs/generate.py --run smoke1 --topics items,blocks,commands --per-combo 2 --difficulties 1
-Full run:
-    python -m modal run modal_jobs/generate.py --run gen1 --per-combo 25
+Smoke test:  python -m modal run modal_jobs/generate.py::main --run smoke2 --topics items,blocks,commands --per-combo 2 --difficulties 1
+Full run:    python -m modal run modal_jobs/generate.py::main --run gen1 --per-combo 25
 """
 import json
 import os
@@ -20,24 +21,58 @@ import modal
 TEACHER = "Qwen/Qwen3.8-27B-FP8"
 VERSION = "1.21.11"
 GPU = "H100"
+GPU_USD_PER_HOUR = 3.95
+REPO_DIR = "/root/nai"  # tools/, restrictions.txt, templates/ live here in every container
 
 app = modal.App("nullified-ai-generate")
 cache = modal.Volume.from_name("nullified-cache", create_if_missing=True)
-image = (
+
+teacher_image = (
     # CUDA devel image: vLLM JIT-compiles some kernels at startup and needs nvcc + headers.
     modal.Image.from_registry("nvidia/cuda:13.0.2-devel-ubuntu24.04", add_python="3.12")
     .pip_install("vllm", "huggingface_hub")
     .env({"HF_HOME": "/cache/hf", "VLLM_LOGGING_LEVEL": "WARNING", "CUDA_HOME": "/usr/local/cuda"})
-    .add_local_dir("tools", "/root/tools")
-    .add_local_file("restrictions.txt", "/root/restrictions.txt")
+    .add_local_dir("tools", f"{REPO_DIR}/tools")
+    .add_local_file("restrictions.txt", f"{REPO_DIR}/restrictions.txt")
+)
+
+# Compile workers: JDK + the template with Minecraft already downloaded/remapped at image build time,
+# so each worker compiles a mod in seconds.
+compile_image = (
+    modal.Image.from_registry("ubuntu:24.04", add_python="3.12")
+    .apt_install("openjdk-21-jdk-headless")
+    .add_local_dir(f"templates/{VERSION}", f"{REPO_DIR}/templates/{VERSION}", copy=True)
+    .run_commands(
+        f"mkdir -p {REPO_DIR}/.work && cp -r {REPO_DIR}/templates/{VERSION} {REPO_DIR}/.work/{VERSION}",
+        f"cd {REPO_DIR}/.work/{VERSION} && chmod +x gradlew && ./gradlew compileJava compileClientJava --console=plain --no-daemon",
+    )
+    .add_local_dir("tools", f"{REPO_DIR}/tools")
+    .add_local_file("restrictions.txt", f"{REPO_DIR}/restrictions.txt")
 )
 
 
-def hf_user(api) -> str:
-    return api.whoami()["name"]
+@app.function(image=compile_image, cpu=2, memory=4096, timeout=1800, max_containers=40)
+def compile_batch(items: list[dict]) -> list[dict]:
+    """items: [{"id", "files"}] -> [{"id", "ok", "stage", "errors", "seconds"}]"""
+    import shutil
+    from pathlib import Path
+    sys.path.insert(0, f"{REPO_DIR}/tools")
+    from batch_compile import check_sample, prepare_work_project
+
+    work = prepare_work_project(VERSION)
+    results = []
+    for item in items:
+        sample = Path(f"/tmp/samples/{item['id']}")
+        shutil.rmtree(sample, ignore_errors=True)
+        for rel, body in item["files"].items():
+            (sample / rel).parent.mkdir(parents=True, exist_ok=True)
+            (sample / rel).write_text(body, encoding="utf-8")
+        r = check_sample(sample, work, timeout=300)
+        results.append({"id": item["id"], "ok": r["ok"], "stage": r["stage"], "errors": r["errors"], "seconds": r["seconds"]})
+    return results
 
 
-@app.function(image=image, volumes={"/cache": cache}, timeout=3600, cpu=2,
+@app.function(image=teacher_image, volumes={"/cache": cache}, timeout=3600, cpu=2,
               secrets=[modal.Secret.from_name("huggingface")])
 def prefetch_teacher() -> str:
     """Download the teacher weights on a cheap CPU container so the GPU never waits on downloads."""
@@ -47,24 +82,37 @@ def prefetch_teacher() -> str:
     return path
 
 
-@app.function(image=image, gpu=GPU, volumes={"/cache": cache}, timeout=6 * 3600,
+def compile_all(records: list[dict], chunk: int = 8) -> None:
+    """Compile every record that has files and hasn't passed yet; write results onto the records."""
+    todo = [{"id": r["id"], "files": r["files"]} for r in records if r["files"] and not r.get("ok")]
+    by_id = {r["id"]: r for r in records}
+    chunks = [todo[i:i + chunk] for i in range(0, len(todo), chunk)]
+    for batch in compile_batch.map(chunks):
+        for res in batch:
+            by_id[res["id"]].update(ok=res["ok"], stage=res["stage"], errors=res["errors"])
+
+
+@app.function(image=teacher_image, gpu=GPU, volumes={"/cache": cache}, timeout=6 * 3600,
               secrets=[modal.Secret.from_name("huggingface")])
 def generate(run: str, topics: list[str], difficulties: list[int], per_combo: int,
-             seed: int = 0, thinking: bool = False) -> dict:
-    sys.path.insert(0, "/root/tools")
+             fix_rounds: int = 3, seed: int = 0, thinking: bool = False) -> dict:
+    sys.path.insert(0, f"{REPO_DIR}/tools")
     from huggingface_hub import HfApi, snapshot_download
-    from prompts import (DIFFICULTY, REQUEST_PROMPT, SOLVE_PROMPT, TOPICS, parse_answer, system_prompt)
+    from prompts import (DIFFICULTY, FIX_PROMPT, REQUEST_PROMPT, SOLVE_PROMPT, TOPICS, format_files,
+                         parse_answer, system_prompt)
     from retrieval import ReferenceIndex
+    from symbols import SymbolIndex
     from vllm import LLM, SamplingParams
 
     token = os.environ["HF_TOKEN"]
     api = HfApi(token=token)
-    user = hf_user(api)
+    user = api.whoami()["name"]
     started = time.time()
 
     ref_dir = snapshot_download(f"{user}/nullified-ai-reference", repo_type="dataset", token=token,
                                 allow_patterns=[f"{VERSION}/*"], local_dir="/tmp/reference")
     index = ReferenceIndex.load(f"{ref_dir}/{VERSION}", VERSION)
+    symbols = SymbolIndex.load(f"{ref_dir}/{VERSION}/minecraft-{VERSION}.jsonl")
 
     llm = LLM(model=TEACHER, max_model_len=32768, gpu_memory_utilization=0.92,
               download_dir="/cache/hf", seed=seed,
@@ -72,14 +120,15 @@ def generate(run: str, topics: list[str], difficulties: list[int], per_combo: in
     chat_kwargs = {"enable_thinking": thinking}
     system = system_prompt(VERSION)
 
+    def chat(user_prompts: list[str], temperature: float, max_tokens: int) -> list:
+        convs = [[{"role": "system", "content": system}, {"role": "user", "content": p}] for p in user_prompts]
+        return llm.chat(convs, SamplingParams(temperature=temperature, top_p=0.95, max_tokens=max_tokens, seed=seed),
+                        chat_template_kwargs=chat_kwargs)
+
     # --- Stage 1: requests ---
     combos = [(t, d) for t in topics for d in difficulties]
-    req_convs = [[{"role": "system", "content": system},
-                  {"role": "user", "content": REQUEST_PROMPT.format(
-                      n=per_combo, topic=t, topic_hint=TOPICS[t], difficulty=DIFFICULTY[d])}]
-                 for t, d in combos]
-    outs = llm.chat(req_convs, SamplingParams(temperature=0.9, top_p=0.95, max_tokens=3000, seed=seed),
-                    chat_template_kwargs=chat_kwargs)
+    outs = chat([REQUEST_PROMPT.format(n=per_combo, topic=t, topic_hint=TOPICS[t], difficulty=DIFFICULTY[d])
+                 for t, d in combos], temperature=0.9, max_tokens=3000)
     jobs = []
     for (topic, diff), out in zip(combos, outs):
         text = out.outputs[0].text
@@ -90,29 +139,47 @@ def generate(run: str, topics: list[str], difficulties: list[int], per_combo: in
         jobs += [{"topic": topic, "difficulty": diff, "request": r.strip()} for r in reqs[:per_combo]
                  if isinstance(r, str) and len(r.strip()) > 15]
     random.Random(seed).shuffle(jobs)
-    print(f"stage 1: {len(jobs)} requests from {len(combos)} topic/difficulty combos", flush=True)
+    print(f"stage 1: {len(jobs)} requests from {len(combos)} combos", flush=True)
 
-    # --- Stage 2: solutions ---
-    solve_convs = []
-    for job in jobs:
-        job["reference"] = index.context_for(f"{job['topic']} {job['request']}", budget_chars=40000)
-        solve_convs.append([{"role": "system", "content": system},
-                            {"role": "user", "content": SOLVE_PROMPT.format(
-                                version=VERSION, request=job["request"], reference=job["reference"])}])
-    outs = llm.chat(solve_convs, SamplingParams(temperature=0.6, top_p=0.95, max_tokens=14000, seed=seed),
-                    chat_template_kwargs=chat_kwargs)
-
+    # --- Stage 2: first solutions ---
+    prompts = [SOLVE_PROMPT.format(version=VERSION, request=j["request"],
+                                   reference=index.context_for(f"{j['topic']} {j['request']}", budget_chars=36000))
+               for j in jobs]
+    outs = chat(prompts, temperature=0.6, max_tokens=14000)
     records, out_tokens = [], 0
     for i, (job, out) in enumerate(zip(jobs, outs)):
-        answer = out.outputs[0].text
+        parsed = parse_answer(out.outputs[0].text)
         out_tokens += len(out.outputs[0].token_ids)
-        parsed = parse_answer(answer)
         records.append({
             "id": f"{run}-{i:05d}", "run": run, "version": VERSION, "teacher": TEACHER,
             "topic": job["topic"], "difficulty": job["difficulty"], "request": job["request"],
             "plan": parsed["plan"], "files": parsed["files"], "refused": parsed["refused"],
-            "dropped": parsed["dropped"], "finish": out.outputs[0].finish_reason, "raw": answer,
+            "finish": out.outputs[0].finish_reason, "ok": False, "stage": None, "errors": [],
+            "attempts": [],  # each failed compile + the teacher's fix (Fixer training data)
         })
+
+    # --- Stage 3/4: compile, then fix what failed ---
+    history = []
+    for rnd in range(fix_rounds + 1):
+        compile_all(records)
+        passed = sum(r["ok"] for r in records)
+        history.append(passed)
+        print(f"round {rnd}: {passed}/{len(records)} compile", flush=True)
+        failing = [r for r in records if r["files"] and not r["ok"] and r["stage"] == "compile"]
+        if rnd == fix_rounds or not failing:
+            break
+        fix_prompts = []
+        for r in failing:
+            errors = "\n\n".join(e[:600] for e in r["errors"][:15])
+            hints = symbols.hints_for_errors(r["errors"], r["files"])[:20000]
+            fix_prompts.append(FIX_PROMPT.format(version=VERSION, request=r["request"], files=format_files(r["files"]),
+                                                 errors=errors, hints=hints))
+        outs = chat(fix_prompts, temperature=0.3, max_tokens=14000)
+        for r, out in zip(failing, outs):
+            out_tokens += len(out.outputs[0].token_ids)
+            changed = parse_answer(out.outputs[0].text)["files"]
+            r["attempts"].append({"round": rnd, "errors": r["errors"], "changed": changed})
+            r["files"] = {**r["files"], **changed}
 
     path = f"/tmp/{run}.jsonl"
     with open(path, "w", encoding="utf-8") as f:
@@ -124,17 +191,17 @@ def generate(run: str, topics: list[str], difficulties: list[int], per_combo: in
 
     minutes = (time.time() - started) / 60
     return {
-        "run": run, "requests": len(jobs), "with_files": sum(bool(r["files"]) for r in records),
-        "refused": sum(bool(r["refused"]) for r in records),
-        "cut_off": sum(r["finish"] == "length" for r in records),
-        "output_tokens": out_tokens, "gpu_minutes": round(minutes, 1),
-        "approx_cost_usd": round(minutes / 60 * 3.95, 2), "saved_to": f"{repo}/raw/{run}.jsonl",
+        "run": run, "requests": len(records), "compiled_per_round": history,
+        "compiled": sum(r["ok"] for r in records), "refused": sum(bool(r["refused"]) for r in records),
+        "cut_off": sum(r["finish"] == "length" for r in records), "output_tokens": out_tokens,
+        "gpu_minutes": round(minutes, 1), "approx_gpu_cost_usd": round(minutes / 60 * GPU_USD_PER_HOUR, 2),
+        "saved_to": f"{repo}/raw/{run}.jsonl",
     }
 
 
 @app.local_entrypoint()
 def main(run: str, topics: str = "", difficulties: str = "1,2,3", per_combo: int = 10,
-         seed: int = 0, thinking: bool = False):
+         fix_rounds: int = 3, seed: int = 0, thinking: bool = False):
     sys.path.insert(0, "tools")
     from prompts import TOPICS
     topic_list = [t.strip() for t in topics.split(",") if t.strip()] or list(TOPICS)
@@ -143,6 +210,21 @@ def main(run: str, topics: str = "", difficulties: str = "1,2,3", per_combo: int
         raise SystemExit(f"unknown topics: {unknown}. Choose from: {', '.join(TOPICS)}")
     diffs = [int(d) for d in difficulties.split(",")]
     print(f"run={run}: {len(topic_list)} topics x {len(diffs)} difficulties x {per_combo} = "
-          f"up to {len(topic_list) * len(diffs) * per_combo} mods on {GPU} with {TEACHER}")
+          f"up to {len(topic_list) * len(diffs) * per_combo} mods on {GPU} with {TEACHER}, {fix_rounds} fix rounds")
     print("teacher weights:", prefetch_teacher.remote())
-    print(json.dumps(generate.remote(run, topic_list, diffs, per_combo, seed, thinking), indent=2))
+    print(json.dumps(generate.remote(run, topic_list, diffs, per_combo, fix_rounds, seed, thinking), indent=2))
+
+
+@app.local_entrypoint()
+def test_compile():
+    """CPU-only check of the compile workers using samples/smoke (expects everything but outdated_api to pass)."""
+    from pathlib import Path
+    items = []
+    for sample in sorted(Path("samples/smoke").iterdir()):
+        files = {p.relative_to(sample).as_posix(): p.read_text(encoding="utf-8")
+                 for p in sample.rglob("*") if p.is_file() and p.suffix in {".java", ".json"}}
+        items.append({"id": sample.name, "files": files})
+    for res in compile_batch.remote(items):
+        print(f"{res['id']}: {'PASS' if res['ok'] else 'FAIL'} ({res['stage']}, {res['seconds']}s)")
+        for e in res["errors"][:2]:
+            print("   ", e.splitlines()[0][-150:])
