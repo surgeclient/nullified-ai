@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from proc import run_capped  # noqa: E402
 from restrictions import scan_dir  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -96,20 +97,17 @@ def check_sample(sample: Path, work: Path, timeout: int) -> dict:
 
     shutil.rmtree(work / "src", ignore_errors=True)
     shutil.copytree(src, work / "src")
-    try:
-        proc = subprocess.run(
-            [GRADLEW, *COMPILE_TASKS, "--console=plain", "--stacktrace"],
-            cwd=work, capture_output=True, text=True, timeout=timeout, shell=(os.name == "nt"),
-        )
-    except subprocess.TimeoutExpired:
-        result.update(stage="timeout", errors=[f"compile took longer than {timeout}s"])
-        return result
-
+    cmd = [GRADLEW, *COMPILE_TASKS, "--console=plain", "--stacktrace", "--no-daemon"]
+    if os.name == "nt":
+        cmd = ["cmd", "/c", *cmd]
+    returncode, output, timed_out = run_capped(cmd, work, timeout)
     result["seconds"] = round(time.time() - start, 1)
-    if proc.returncode == 0:
+    if timed_out:
+        result.update(stage="timeout", errors=[f"compile took longer than {timeout}s"])
+    elif returncode == 0:
         result.update(ok=True, stage="compiled")
     else:
-        result.update(stage="compile", errors=extract_errors(proc.stdout + "\n" + proc.stderr))
+        result.update(stage="compile", errors=extract_errors(output))
     return result
 
 

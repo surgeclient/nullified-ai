@@ -66,7 +66,7 @@ compile_image = (
 )
 
 
-@app.function(image=compile_image, cpu=2, memory=6144, timeout=3600, max_containers=60)
+@app.function(image=compile_image, cpu=2, memory=6144, timeout=1200, max_containers=60, retries=0)
 def compile_batch(items: list[dict]) -> list[dict]:
     """Compile each mod, boot a real server with it, validate its assets.
     items: [{"id", "files"}] -> [{"id", "ok", "stage", "errors", "seconds"}]

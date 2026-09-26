@@ -5,10 +5,12 @@
   validate_assets(files, probe) -> list of problems (missing blockstates/models/item definitions/lang entries)
 """
 import json
+import os
 import re
 import shutil
-import subprocess
 from pathlib import Path
+
+from proc import run_capped
 
 SERVER_PROPERTIES = """online-mode=false
 level-type=minecraft\\:flat
@@ -51,19 +53,20 @@ def extract_runtime_errors(output: str, limit_lines: int = 40) -> list[str]:
 
 def run_server(work: Path, probe_jar: Path, gradlew: str = "./gradlew", timeout: int = 240) -> tuple[bool, list[str], dict]:
     run = prepare_run_dir(work, probe_jar)
-    try:
-        proc = subprocess.run([gradlew, "runServer", "--console=plain", "--args=nogui"],
-                              cwd=work, capture_output=True, text=True, timeout=timeout)
-        output = proc.stdout + "\n" + proc.stderr
-    except subprocess.TimeoutExpired as e:
-        subprocess.run(["pkill", "-f", "net.fabricmc.devlaunchinjector"], capture_output=True)
-        output = (e.stdout or b"").decode(errors="ignore") if isinstance(e.stdout, bytes) else (e.stdout or "")
-        errs = extract_runtime_errors(output) or [f"server did not finish starting within {timeout}s"]
-        return False, errs, {}
+    # run_capped kills the whole process group on timeout, so a mod that hangs the server can't
+    # leave an orphaned JVM holding the output pipe open (which would block forever).
+    cmd = [gradlew, "runServer", "--console=plain", "--no-daemon", "--args=nogui"]
+    if os.name == "nt":
+        cmd = ["cmd", "/c", *cmd]
+    _returncode, output, timed_out = run_capped(cmd, work, timeout)
 
+    # The probe mod writes probe.json and halts the server the moment startup completes, so if the
+    # file exists the mod loaded successfully even if gradle was still shutting down at the timeout.
     probe_file = run / "probe.json"
     if probe_file.exists():
         return True, [], json.loads(probe_file.read_text())
+    if timed_out:
+        return False, extract_runtime_errors(output) or [f"server did not finish starting within {timeout}s"], {}
     return False, extract_runtime_errors(output) or [output[-3000:]], {}
 
 
