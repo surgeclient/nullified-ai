@@ -138,7 +138,8 @@ Fix every problem. Keep all of the mod's features - never delete a feature to ma
 <complete file contents>
 === END FILE ==="""
 
-FILE_BLOCK = re.compile(r"^=== FILE: (?P<path>[^\n=]+?) ===\n(?P<body>.*?)^=== END FILE ===", re.S | re.M)
+FILE_HEADER = re.compile(r"^=== FILE:\s*(?P<path>[^\s=][^=]*?)\s*(?:===)?\s*$")
+END_MARKER = re.compile(r"^=== END FILE\s*(?:===)?\s*$")
 SAFE_PATH = re.compile(r"^src/(main|client)/(java|resources)/[\w./\-]+$")
 
 
@@ -183,15 +184,57 @@ def parse_answer(text: str) -> dict:
     if refused:
         return {"refused": refused.group(1).strip(), "plan": "", "files": {}, "dropped": []}
     plan = text.split("=== FILE:", 1)[0].replace("PLAN:", "", 1).strip()
+    # Line-based and lenient: models sometimes write "=== END FILE" without the closing "===",
+    # or skip the end marker and start the next file directly.
+    blocks, current = [], None
+    for line in text.splitlines():
+        header = FILE_HEADER.match(line)
+        if header:
+            if current:
+                blocks.append(current)
+            current = (header.group("path").strip(), [])
+        elif END_MARKER.match(line):
+            if current:
+                blocks.append(current)
+            current = None
+        elif current:
+            current[1].append(line)
+    if current:
+        blocks.append(current)
+
     files, dropped = {}, []
-    for m in FILE_BLOCK.finditer(text):
-        path = m.group("path").strip()
-        body = re.sub(r"^```\w*\n|```\s*$", "", m.group("body"), flags=re.M)  # strip stray code fences
+    for path, lines in blocks:
+        body = re.sub(r"^```\w*\n|```\s*$", "", "\n".join(lines), flags=re.M)  # strip stray code fences
+        if path.endswith(".java"):
+            body = dedupe_imports(body)
         if SAFE_PATH.match(path) and ".." not in path:
             files[path] = body.rstrip() + "\n"
         else:
             dropped.append(path)
     return {"refused": None, "plan": plan, "files": files, "dropped": dropped}
+
+
+def dedupe_imports(java: str) -> str:
+    """Drop repeated identical import lines (a symptom of the model getting stuck in a loop)."""
+    seen, out = set(), []
+    for line in java.splitlines():
+        key = line.strip()
+        if key.startswith("import "):
+            if key in seen:
+                continue
+            seen.add(key)
+        out.append(line)
+    return "\n".join(out)
+
+
+def looks_looped(text: str, threshold: int = 25) -> bool:
+    """True if one non-trivial line repeats many times - the answer is stuck and should be resampled."""
+    counts = {}
+    for line in text.splitlines():
+        key = line.strip()
+        if len(key) > 12:
+            counts[key] = counts.get(key, 0) + 1
+    return bool(counts) and max(counts.values()) >= threshold
 
 
 def format_files(files: dict) -> str:

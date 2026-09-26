@@ -81,8 +81,8 @@ def solve(requests: list[str], use_adapter: bool = True, fix_rounds: int = 3) ->
     """Run the plan -> write -> check -> fix loop for each request. Returns one record per request."""
     sys.path.insert(0, f"{REPO_DIR}/tools")
     from huggingface_hub import HfApi, hf_hub_download, snapshot_download
-    from prompts import (FIX_PROMPT, STAGE_EXPLAINED, STUDENT_SOLVE_PROMPT, format_files, parse_answer,
-                         parse_review, review_prompt, runtime_hints, system_prompt)
+    from prompts import (FIX_PROMPT, STAGE_EXPLAINED, STUDENT_SOLVE_PROMPT, format_files, looks_looped,
+                         parse_answer, parse_review, review_prompt, runtime_hints, system_prompt)
     from symbols import SymbolIndex
     from vllm import LLM, SamplingParams
     from vllm.lora.request import LoRARequest
@@ -99,11 +99,18 @@ def solve(requests: list[str], use_adapter: bool = True, fix_rounds: int = 3) ->
               enable_lora=use_adapter, max_lora_rank=64, max_num_seqs=64)
     system = system_prompt(VERSION)
 
-    def chat(prompts: list[str], temperature: float, max_tokens: int = 14000) -> list[str]:
+    def chat_full(prompts: list[str], temperature: float, max_tokens: int = 14000, repetition_penalty: float = 1.05) -> list:
         convs = [[{"role": "system", "content": system}, {"role": "user", "content": p}] for p in prompts]
-        outs = llm.chat(convs, SamplingParams(temperature=temperature, top_p=0.95, max_tokens=max_tokens),
-                        lora_request=lora, chat_template_kwargs={"enable_thinking": False})
-        return [o.outputs[0].text for o in outs]
+        params = SamplingParams(temperature=temperature, top_p=0.95, max_tokens=max_tokens,
+                                repetition_penalty=repetition_penalty)
+        outs = llm.chat(convs, params, lora_request=lora, chat_template_kwargs={"enable_thinking": False})
+        return [o.outputs[0] for o in outs]
+
+    def chat(prompts: list[str], temperature: float, max_tokens: int = 14000) -> list[str]:
+        return [o.text for o in chat_full(prompts, temperature, max_tokens)]
+
+    def stuck(out) -> bool:
+        return out.finish_reason == "length" or looks_looped(out.text)
 
     # Restrictions gate: every request is checked against restrictions.txt before anything is built.
     blocked = [parse_review(a) for a in chat([review_prompt(r) for r in requests], 0.0, max_tokens=200)]
@@ -112,11 +119,18 @@ def solve(requests: list[str], use_adapter: bool = True, fix_rounds: int = 3) ->
                for i, (req, rule) in enumerate(zip(requests, blocked))]
 
     allowed = [r for r in records if not r["refused"]]
-    answers = chat([STUDENT_SOLVE_PROMPT.format(version=VERSION, request=r["request"]) for r in allowed], 0.4)
-    for r, answer in zip(allowed, answers):
-        parsed = parse_answer(answer)
+    solve_prompts = [STUDENT_SOLVE_PROMPT.format(version=VERSION, request=r["request"]) for r in allowed]
+    outs = chat_full(solve_prompts, 0.4)
+    # Answers that got stuck repeating themselves or ran out of tokens get one retry with more varied sampling.
+    retry = [i for i, o in enumerate(outs) if stuck(o)]
+    for i, o in zip(retry, chat_full([solve_prompts[i] for i in retry], 0.8, repetition_penalty=1.15)):
+        if not stuck(o) or len(parse_answer(o.text)["files"]) > len(parse_answer(outs[i].text)["files"]):
+            outs[i] = o
+    for r, out in zip(allowed, outs):
+        parsed = parse_answer(out.text)
         r.update(plan=parsed["plan"], files=parsed["files"], refused=parsed["refused"],
-                 stage="refused" if parsed["refused"] else None)
+                 stage="refused" if parsed["refused"] else ("no-files" if not parsed["files"] else None),
+                 first_answer=out.text, first_finish=out.finish_reason, first_tokens=len(out.token_ids))
 
     for rnd in range(fix_rounds + 1):
         todo = [{"id": r["id"], "files": r["files"]} for r in records if r["files"] and not r["ok"]]
@@ -134,8 +148,9 @@ def solve(requests: list[str], use_adapter: bool = True, fix_rounds: int = 3) ->
                                      errors="\n\n".join(e[:600] for e in r["errors"][:15]),
                                      hints=symbols.hints_for_errors(r["errors"], r["files"])[:20000] + runtime_hints(r["errors"]))
                    for r in failing]
-        for r, answer in zip(failing, chat(prompts, 0.2)):
-            r["files"] = {**r["files"], **parse_answer(answer)["files"]}
+        for r, out in zip(failing, chat_full(prompts, 0.2)):
+            if not stuck(out):  # a looping fix would overwrite good files with garbage
+                r["files"] = {**r["files"], **parse_answer(out.text)["files"]}
     return records
 
 
@@ -173,8 +188,9 @@ def build(request: str, fix_rounds: int = 4):
 
 
 @app.local_entrypoint()
-def evaluate(fix_rounds: int = 3, base_too: bool = True):
+def evaluate(fix_rounds: int = 3, base_too: bool = True, limit: int = 0):
     requests = [e["request"] for e in json.loads(Path("tools/eval_requests.json").read_text())]
+    requests = requests[:limit] if limit else requests
     variants = [("nullified", True)] + ([("base", False)] if base_too else [])
     report = {}
     for name, use_adapter in variants:
@@ -184,7 +200,12 @@ def evaluate(fix_rounds: int = 3, base_too: bool = True):
                          or (len(r["stage_history"]) <= k and r["ok"])) for k in range(rounds)]
         # Every eval request is allowed, so any refusal here is a wrong refusal.
         report[name] = {"first_try": per_round[0], "after_fixes": per_round[-1], "per_round": per_round,
-                        "wrongly_refused": sum(bool(r["refused"]) for r in recs), "of": len(recs)}
+                        "wrongly_refused": sum(bool(r["refused"]) for r in recs), "of": len(recs),
+                        "final_stages": {s: sum(r["stage"] == s for r in recs) for s in {r["stage"] for r in recs}},
+                        "cut_off": sum(r.get("first_finish") == "length" for r in recs)}
         print(name, json.dumps(report[name]))
-    Path("output").mkdir(exist_ok=True)
+        Path("output").mkdir(exist_ok=True)
+        with open(f"output/eval_{name}.jsonl", "w", encoding="utf-8") as f:
+            for r in recs:
+                print(json.dumps(r, ensure_ascii=False), file=f)
     Path("output/eval.json").write_text(json.dumps(report, indent=2))
