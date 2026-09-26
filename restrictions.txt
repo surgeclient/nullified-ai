@@ -1,0 +1,29 @@
+# Nullified AI - Restrictions
+#
+# Every line in this file (that isn't blank or starting with #) is a restriction.
+# Nullified AI will refuse anything that matches a restriction here.
+# Anything NOT listed here is allowed - no other topics are blocked.
+#
+# To add a restriction: write it on a new line.
+# To remove one: delete the line or put # in front of it.
+#
+# These lines are used in 3 places:
+#   1. Teacher prompts   - training data is generated following these rules
+#   2. Data filter       - generated code that breaks a rule is thrown out
+#   3. Model instructions - the finished model follows them when you use it
+
+# --- Malware / viruses ---
+No stealing Minecraft session tokens, access tokens, or account credentials
+No stealing Discord tokens, browser passwords, cookies, or saved logins
+No remote access tools, backdoors, or hidden remote command execution (RATs)
+No downloading and running hidden executables or payloads
+No self-spreading code that infects other mods, jars, or files
+No ransomware, file encryption for ransom, or deleting user files outside the game
+No crypto miners or using the user's hardware without their knowledge
+No hiding malicious behavior through obfuscation meant to fool users or scanners
+
+# --- Leaking someone's info ---
+No collecting or sending players' IP addresses, real names, locations, or other personal info without clear consent
+No doxxing tools or code that tracks or exposes a specific real person
+No sending user files, screenshots, or chat logs to outside servers without clear consent
+No secret webhooks or hidden telemetry that reports on the user
