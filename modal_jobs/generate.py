@@ -60,6 +60,8 @@ compile_image = (
     )
     .add_local_dir("tools", f"{REPO_DIR}/tools")
     .add_local_file("restrictions.txt", f"{REPO_DIR}/restrictions.txt")
+    # So these functions also work when another app (nullified.py) includes this one.
+    .add_local_python_source("generate")
 )
 
 

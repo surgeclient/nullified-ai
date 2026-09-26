@@ -34,6 +34,7 @@ model_image = (
     .env({"HF_HOME": "/cache/hf", "VLLM_LOGGING_LEVEL": "WARNING", "CUDA_HOME": "/usr/local/cuda"})
     .add_local_dir("tools", f"{REPO_DIR}/tools")
     .add_local_file("restrictions.txt", f"{REPO_DIR}/restrictions.txt")
+    .add_local_python_source("generate")  # nullified.py imports the shared checks from generate.py
 )
 
 
@@ -154,7 +155,10 @@ def build(request: str, fix_rounds: int = 4):
     if not rec["ok"]:
         print("Could not produce a mod that passes every check. Last problems:")
         for e in rec["errors"][:8]:
-            print("  " + e.splitlines()[0][:200])
+            lines = e.splitlines()
+            print("  " + lines[0][:200])
+            for cause in [l.strip() for l in lines[1:] if l.strip().startswith("Caused by")][-1:]:
+                print("    " + cause[:200])  # the root cause of a crash
         return
     out = package.remote(rec["files"])
     folder = Path("output") / out["mod_id"]
