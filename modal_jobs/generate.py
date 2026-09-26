@@ -9,6 +9,7 @@ Output: raw/<run>.jsonl in the private HF dataset <you>/nullified-ai-data.
 
 Smoke test:  python -m modal run modal_jobs/generate.py::main --run smoke2 --topics items,blocks,commands --per-combo 2 --difficulties 1
 Full run:    python -m modal run modal_jobs/generate.py::main --run gen1 --per-combo 25
+More fixes:  python -m modal run modal_jobs/generate.py::main --run gen1b --resume-from gen1 --fix-rounds 4
 """
 import json
 import os
@@ -121,9 +122,9 @@ def compile_all(records: list[dict], chunk: int = 3) -> None:
 @app.function(image=teacher_image, gpu=GPU, volumes={"/cache": cache}, timeout=6 * 3600,
               secrets=[modal.Secret.from_name("huggingface")])
 def generate(run: str, topics: list[str], difficulties: list[int], per_combo: int,
-             fix_rounds: int = 3, seed: int = 0, thinking: bool = False) -> dict:
+             fix_rounds: int = 3, seed: int = 0, thinking: bool = False, resume_from: str = "") -> dict:
     sys.path.insert(0, f"{REPO_DIR}/tools")
-    from huggingface_hub import HfApi, snapshot_download
+    from huggingface_hub import HfApi, hf_hub_download, snapshot_download
     from prompts import (DIFFICULTY, FIX_PROMPT, REQUEST_PROMPT, SOLVE_PROMPT, STAGE_EXPLAINED, TOPICS,
                          format_files, parse_answer, runtime_hints, system_prompt)
     from retrieval import ReferenceIndex
@@ -151,38 +152,49 @@ def generate(run: str, topics: list[str], difficulties: list[int], per_combo: in
         return llm.chat(convs, SamplingParams(temperature=temperature, top_p=0.95, max_tokens=max_tokens, seed=seed),
                         chat_template_kwargs=chat_kwargs)
 
-    # --- Stage 1: requests ---
-    combos = [(t, d) for t in topics for d in difficulties]
-    outs = chat([REQUEST_PROMPT.format(n=per_combo, topic=t, topic_hint=TOPICS[t], difficulty=DIFFICULTY[d])
-                 for t, d in combos], temperature=0.9, max_tokens=3000)
-    jobs = []
-    for (topic, diff), out in zip(combos, outs):
-        text = out.outputs[0].text
-        try:
-            reqs = json.loads(text[text.index("["):text.rindex("]") + 1])
-        except ValueError:
-            continue
-        jobs += [{"topic": topic, "difficulty": diff, "request": r.strip()} for r in reqs[:per_combo]
-                 if isinstance(r, str) and len(r.strip()) > 15]
-    random.Random(seed).shuffle(jobs)
-    print(f"stage 1: {len(jobs)} requests from {len(combos)} combos", flush=True)
+    def first_solutions():
+        # --- Stage 1: requests ---
+        combos = [(t, d) for t in topics for d in difficulties]
+        outs = chat([REQUEST_PROMPT.format(n=per_combo, topic=t, topic_hint=TOPICS[t], difficulty=DIFFICULTY[d])
+                     for t, d in combos], temperature=0.9, max_tokens=3000)
+        jobs = []
+        for (topic, diff), out in zip(combos, outs):
+            text = out.outputs[0].text
+            try:
+                reqs = json.loads(text[text.index("["):text.rindex("]") + 1])
+            except ValueError:
+                continue
+            jobs += [{"topic": topic, "difficulty": diff, "request": r.strip()} for r in reqs[:per_combo]
+                     if isinstance(r, str) and len(r.strip()) > 15]
+        random.Random(seed).shuffle(jobs)
+        print(f"stage 1: {len(jobs)} requests from {len(combos)} combos", flush=True)
 
-    # --- Stage 2: first solutions ---
-    prompts = [SOLVE_PROMPT.format(version=VERSION, request=j["request"],
-                                   reference=index.context_for(f"{j['topic']} {j['request']}", budget_chars=36000))
-               for j in jobs]
-    outs = chat(prompts, temperature=0.6, max_tokens=14000)
-    records, out_tokens = [], 0
-    for i, (job, out) in enumerate(zip(jobs, outs)):
-        parsed = parse_answer(out.outputs[0].text)
-        out_tokens += len(out.outputs[0].token_ids)
-        records.append({
-            "id": f"{run}-{i:05d}", "run": run, "version": VERSION, "teacher": TEACHER,
-            "topic": job["topic"], "difficulty": job["difficulty"], "request": job["request"],
-            "plan": parsed["plan"], "files": parsed["files"], "refused": parsed["refused"],
-            "finish": out.outputs[0].finish_reason, "ok": False, "stage": None, "errors": [],
-            "attempts": [],  # each failed compile + the teacher's fix (Fixer training data)
-        })
+        # --- Stage 2: first solutions ---
+        prompts = [SOLVE_PROMPT.format(version=VERSION, request=j["request"],
+                                       reference=index.context_for(f"{j['topic']} {j['request']}", budget_chars=36000))
+                   for j in jobs]
+        outs = chat(prompts, temperature=0.6, max_tokens=14000)
+        records, out_tokens = [], 0
+        for i, (job, out) in enumerate(zip(jobs, outs)):
+            parsed = parse_answer(out.outputs[0].text)
+            out_tokens += len(out.outputs[0].token_ids)
+            records.append({
+                "id": f"{run}-{i:05d}", "run": run, "version": VERSION, "teacher": TEACHER,
+                "topic": job["topic"], "difficulty": job["difficulty"], "request": job["request"],
+                "plan": parsed["plan"], "files": parsed["files"], "refused": parsed["refused"],
+                "finish": out.outputs[0].finish_reason, "ok": False, "stage": None, "errors": [],
+                "attempts": [],  # each failed compile + the teacher's fix (Fixer training data)
+            })
+        return records, out_tokens
+
+    if resume_from:
+        # Continue fixing a previous run's failing mods instead of generating new ones.
+        prev = hf_hub_download(f"{user}/nullified-ai-data", f"raw/{resume_from}.jsonl", repo_type="dataset",
+                               token=token)
+        records, out_tokens = [json.loads(l) for l in open(prev, encoding="utf-8")], 0
+        print(f"resuming {resume_from}: {sum(r['ok'] for r in records)}/{len(records)} already pass", flush=True)
+    else:
+        records, out_tokens = first_solutions()
 
     # --- Stage 3/4: compile, then fix what failed ---
     history = []
@@ -232,7 +244,7 @@ def generate(run: str, topics: list[str], difficulties: list[int], per_combo: in
 
 @app.local_entrypoint()
 def main(run: str, topics: str = "", difficulties: str = "1,2,3", per_combo: int = 10,
-         fix_rounds: int = 3, seed: int = 0, thinking: bool = False):
+         fix_rounds: int = 3, seed: int = 0, thinking: bool = False, resume_from: str = ""):
     sys.path.insert(0, "tools")
     from prompts import TOPICS
     topic_list = [t.strip() for t in topics.split(",") if t.strip()] or list(TOPICS)
@@ -243,7 +255,8 @@ def main(run: str, topics: str = "", difficulties: str = "1,2,3", per_combo: int
     print(f"run={run}: {len(topic_list)} topics x {len(diffs)} difficulties x {per_combo} = "
           f"up to {len(topic_list) * len(diffs) * per_combo} mods on {GPU} with {TEACHER}, {fix_rounds} fix rounds")
     print("teacher weights:", prefetch_teacher.remote())
-    print(json.dumps(generate.remote(run, topic_list, diffs, per_combo, fix_rounds, seed, thinking), indent=2))
+    print(json.dumps(generate.remote(run, topic_list, diffs, per_combo, fix_rounds, seed, thinking, resume_from),
+                     indent=2))
 
 
 @app.local_entrypoint()
