@@ -19,7 +19,7 @@ Minecraft 1.21.11 · Fabric Loader 0.19.5 · Fabric API 0.141.6+1.21.11 · Mojan
 
 ## Roadmap
 1. ✅ Repo, restrictions, 1.21.11 template, compile + build workflows
-2. Reference material (Fabric API source, docs, open-licensed example mods)
+2. ✅ Reference corpus (`collect-reference` workflow → private HF dataset `nullified-ai-reference`)
 3. Data generator (free open-weight teachers via OpenRouter) + compile/restriction filter
 4. Kaggle training: base model + specialist adapters (Planner, Coder, Mixin, Assets, Fixer, Reviewer)
 5. Evaluation suite
