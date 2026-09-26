@@ -12,7 +12,7 @@ Fabric Minecraft mods for 1.21.11 and newer.
 | `tools/batch_compile.py` | Compile-checks many samples with one warm Gradle setup |
 | `tools/build_mod.py` | Builds one sample into a `.jar` + project `.zip` |
 | `tools/restrictions.py` | Loads `restrictions.txt` and scans code for harmful patterns |
-| `.github/workflows/` | `compile-check` (batch) and `build-mod` (jar + zip), both run manually |
+| `.github/workflows/` | `compile-check` (batch), `build-mod` (jar + zip), `collect-reference` (corpus → HF); all run manually |
 
 ## Versions (1.21.11 template)
 Minecraft 1.21.11 · Fabric Loader 0.19.5 · Fabric API 0.141.6+1.21.11 · Mojang mappings
@@ -20,11 +20,11 @@ Minecraft 1.21.11 · Fabric Loader 0.19.5 · Fabric API 0.141.6+1.21.11 · Mojan
 ## Roadmap
 1. ✅ Repo, restrictions, 1.21.11 template, compile + build workflows
 2. ✅ Reference corpus (`collect-reference` workflow → private HF dataset `nullified-ai-reference`)
-3. Data generator (free open-weight teachers via OpenRouter) + compile/restriction filter
-4. Kaggle training: base model + specialist adapters (Planner, Coder, Mixin, Assets, Fixer, Reviewer)
+3. Data generator (open-weight teacher run on Modal with vLLM) + compile/restriction filter
+4. Modal training: base model + specialist adapters (Planner, Coder, Mixin, Assets, Fixer, Reviewer)
 5. Evaluation suite
 6. Request queue: request → specialists → build → `.zip` + `.jar`, with auto-fix on build errors
 7. Docs lookup for 26.x and newer
 
 ## Secrets
-Stored in GitHub Secrets / Kaggle Secrets only, never in code: `HF_TOKEN`, `OPENROUTER_API_KEY`.
+Stored in GitHub Secrets / Modal Secrets only, never in code: `HF_TOKEN`.
