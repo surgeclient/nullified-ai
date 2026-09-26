@@ -1,0 +1,43 @@
+# Compile-checks a generated run from the private HF dataset and uploads the results back.
+name: compile-dataset
+on:
+  workflow_dispatch:
+    inputs:
+      run:
+        description: "Run name (raw/<run>.jsonl in nullified-ai-data)"
+        required: true
+      template:
+        description: "Template (Minecraft version)"
+        default: "1.21.11"
+
+jobs:
+  compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: 'microsoft'
+      - uses: gradle/actions/setup-gradle@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: pip install -q huggingface_hub
+      - name: compile run
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python tools/compile_dataset.py --run "${{ inputs.run }}" --template "${{ inputs.template }}"
+      - name: summary
+        if: always()
+        run: |
+          echo "## Compile results: ${{ inputs.run }}" >> $GITHUB_STEP_SUMMARY
+          python - >> $GITHUB_STEP_SUMMARY <<'EOF'
+          import json, collections
+          rs = [json.loads(l) for l in open("results/${{ inputs.run }}.jsonl", encoding="utf-8")]
+          print(f"**{sum(r['ok'] for r in rs)}/{len(rs)} compiled**\n")
+          print("| stage | count |\n|---|---|")
+          for s, n in collections.Counter(r["stage"] for r in rs).most_common():
+              print(f"| {s} | {n} |")
+          EOF
