@@ -41,23 +41,38 @@ teacher_image = (
 compile_image = (
     modal.Image.from_registry("ubuntu:24.04", add_python="3.12")
     .apt_install("openjdk-21-jdk-headless")
+    .apt_install("procps")  # pkill, to stop a hung test server
     .add_local_dir(f"templates/{VERSION}", f"{REPO_DIR}/templates/{VERSION}", copy=True)
+    .add_local_dir("tools/probe", "/root/probe_src", copy=True)
+    .add_local_file("tools/runtime_check.py", "/root/runtime_check.py", copy=True)
     .run_commands(
         f"mkdir -p {REPO_DIR}/.work && cp -r {REPO_DIR}/templates/{VERSION} {REPO_DIR}/.work/{VERSION}",
         f"cd {REPO_DIR}/.work/{VERSION} && chmod +x gradlew && ./gradlew compileJava compileClientJava --console=plain --no-daemon",
+        # Build the runtime probe mod against the same template.
+        f"cp -r {REPO_DIR}/templates/{VERSION} /root/probe_build && rm -rf /root/probe_build/src"
+        " && cp -r /root/probe_src/src /root/probe_build/src",
+        "cd /root/probe_build && chmod +x gradlew && ./gradlew build --console=plain --no-daemon",
+        f"cp $(ls /root/probe_build/build/libs/*.jar | grep -v sources) {REPO_DIR}/probe.jar",
+        # Warm-up server boot with the template mod; also proves the probe works (fails the build if not).
+        f"cd /root && python -c \"import sys; sys.path.insert(0, '/root'); from pathlib import Path; "
+        f"from runtime_check import run_server; ok, errs, probe = run_server(Path('{REPO_DIR}/.work/{VERSION}'), "
+        f"Path('{REPO_DIR}/probe.jar'), timeout=900); print(ok, errs, probe); sys.exit(0 if ok else 1)\"",
     )
     .add_local_dir("tools", f"{REPO_DIR}/tools")
     .add_local_file("restrictions.txt", f"{REPO_DIR}/restrictions.txt")
 )
 
 
-@app.function(image=compile_image, cpu=2, memory=4096, timeout=1800, max_containers=40)
+@app.function(image=compile_image, cpu=2, memory=6144, timeout=3600, max_containers=60)
 def compile_batch(items: list[dict]) -> list[dict]:
-    """items: [{"id", "files"}] -> [{"id", "ok", "stage", "errors", "seconds"}]"""
+    """Compile each mod, boot a real server with it, validate its assets.
+    items: [{"id", "files"}] -> [{"id", "ok", "stage", "errors", "seconds"}]
+    stage: compile | runtime | assets | restrictions | json | timeout | passed"""
     import shutil
     from pathlib import Path
     sys.path.insert(0, f"{REPO_DIR}/tools")
     from batch_compile import check_sample, prepare_work_project
+    from runtime_check import run_server, validate_assets
 
     work = prepare_work_project(VERSION)
     results = []
@@ -67,8 +82,17 @@ def compile_batch(items: list[dict]) -> list[dict]:
         for rel, body in item["files"].items():
             (sample / rel).parent.mkdir(parents=True, exist_ok=True)
             (sample / rel).write_text(body, encoding="utf-8")
+        start = time.time()
         r = check_sample(sample, work, timeout=300)
-        results.append({"id": item["id"], "ok": r["ok"], "stage": r["stage"], "errors": r["errors"], "seconds": r["seconds"]})
+        ok, stage, errors = r["ok"], r["stage"], r["errors"]
+        if ok:
+            ok, errors, probe = run_server(work, Path(f"{REPO_DIR}/probe.jar"))
+            stage = "runtime"
+            if ok:
+                errors = validate_assets(item["files"], probe)
+                ok, stage = not errors, "assets" if errors else "passed"
+        results.append({"id": item["id"], "ok": ok, "stage": stage, "errors": errors,
+                        "seconds": round(time.time() - start, 1)})
     return results
 
 
@@ -82,7 +106,7 @@ def prefetch_teacher() -> str:
     return path
 
 
-def compile_all(records: list[dict], chunk: int = 8) -> None:
+def compile_all(records: list[dict], chunk: int = 3) -> None:
     """Compile every record that has files and hasn't passed yet; write results onto the records."""
     todo = [{"id": r["id"], "files": r["files"]} for r in records if r["files"] and not r.get("ok")]
     by_id = {r["id"]: r for r in records}
@@ -98,8 +122,8 @@ def generate(run: str, topics: list[str], difficulties: list[int], per_combo: in
              fix_rounds: int = 3, seed: int = 0, thinking: bool = False) -> dict:
     sys.path.insert(0, f"{REPO_DIR}/tools")
     from huggingface_hub import HfApi, snapshot_download
-    from prompts import (DIFFICULTY, FIX_PROMPT, REQUEST_PROMPT, SOLVE_PROMPT, TOPICS, format_files,
-                         parse_answer, system_prompt)
+    from prompts import (DIFFICULTY, FIX_PROMPT, REQUEST_PROMPT, SOLVE_PROMPT, STAGE_EXPLAINED, TOPICS,
+                         format_files, parse_answer, runtime_hints, system_prompt)
     from retrieval import ReferenceIndex
     from symbols import SymbolIndex
     from vllm import LLM, SamplingParams
@@ -164,8 +188,11 @@ def generate(run: str, topics: list[str], difficulties: list[int], per_combo: in
         compile_all(records)
         passed = sum(r["ok"] for r in records)
         history.append(passed)
-        print(f"round {rnd}: {passed}/{len(records)} compile", flush=True)
-        failing = [r for r in records if r["files"] and not r["ok"] and r["stage"] == "compile"]
+        stages = {}
+        for r in records:
+            stages[r["stage"]] = stages.get(r["stage"], 0) + 1
+        print(f"round {rnd}: {passed}/{len(records)} pass all checks {stages}", flush=True)
+        failing = [r for r in records if r["files"] and not r["ok"] and r["stage"] in STAGE_EXPLAINED]
         if rnd == fix_rounds or not failing:
             break
         fix_prompts = []
@@ -173,7 +200,8 @@ def generate(run: str, topics: list[str], difficulties: list[int], per_combo: in
             errors = "\n\n".join(e[:600] for e in r["errors"][:15])
             hints = symbols.hints_for_errors(r["errors"], r["files"])[:20000]
             fix_prompts.append(FIX_PROMPT.format(version=VERSION, request=r["request"], files=format_files(r["files"]),
-                                                 errors=errors, hints=hints))
+                                                 stage=STAGE_EXPLAINED[r["stage"]], errors=errors,
+                                                 hints=hints + runtime_hints(r["errors"])))
         outs = chat(fix_prompts, temperature=0.3, max_tokens=14000)
         for r, out in zip(failing, outs):
             out_tokens += len(out.outputs[0].token_ids)
@@ -191,8 +219,8 @@ def generate(run: str, topics: list[str], difficulties: list[int], per_combo: in
 
     minutes = (time.time() - started) / 60
     return {
-        "run": run, "requests": len(records), "compiled_per_round": history,
-        "compiled": sum(r["ok"] for r in records), "refused": sum(bool(r["refused"]) for r in records),
+        "run": run, "requests": len(records), "passed_per_round": history,
+        "passed": sum(r["ok"] for r in records), "refused": sum(bool(r["refused"]) for r in records),
         "cut_off": sum(r["finish"] == "length" for r in records), "output_tokens": out_tokens,
         "gpu_minutes": round(minutes, 1), "approx_gpu_cost_usd": round(minutes / 60 * GPU_USD_PER_HOUR, 2),
         "saved_to": f"{repo}/raw/{run}.jsonl",

@@ -1,0 +1,14 @@
+{
+	"schemaVersion": 1,
+	"id": "nullified_probe",
+	"version": "1.0.0",
+	"name": "Nullified Probe",
+	"environment": "*",
+	"entrypoints": {
+		"main": ["nullified.probe.Probe"]
+	},
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"fabric-api": "*"
+	}
+}

@@ -86,7 +86,29 @@ Requirements:
 - Every file complete - no placeholders, no "..." or TODOs.
 - If the request matches a restriction, output only: REFUSED: <one-sentence reason>"""
 
-FIX_PROMPT = """This Fabric mod for Minecraft {version} failed to compile.
+STAGE_EXPLAINED = {
+    "compile": "It failed to compile. The compiler errors are below.",
+    "runtime": "It compiled, but it crashed or failed while a real 1.21.11 server was starting with it. The log is below.",
+    "assets": "It compiled and ran, but its resource files are incomplete, so blocks/items would look broken in game.",
+}
+
+# Known runtime failures -> the fact that fixes them.
+RUNTIME_FACTS = {
+    "id not set": "Every Item.Properties needs .setId(itemKey) and every BlockBehaviour.Properties needs .setId(blockKey) "
+                  "BEFORE the item/block is constructed.",
+    "Mixin apply": "A mixin target method/signature is wrong. Check the exact method name and parameters in 1.21.11.",
+    "Could not execute entrypoint": "An exception was thrown during mod initialization (see the 'Caused by' line).",
+    "Duplicate registration": "Something was registered twice under the same id.",
+}
+
+
+def runtime_hints(errors: list[str]) -> str:
+    text = "\n".join(errors).lower()
+    facts = [fact for key, fact in RUNTIME_FACTS.items() if key.lower() in text]
+    return ("\n" + "\n".join(f"- {f}" for f in facts)) if facts else ""
+
+
+FIX_PROMPT = """This Fabric mod for Minecraft {version} failed a check. {stage}
 
 <request>
 {request}
@@ -96,15 +118,15 @@ FIX_PROMPT = """This Fabric mod for Minecraft {version} failed to compile.
 {files}
 </files>
 
-<compiler_errors>
+<problems>
 {errors}
-</compiler_errors>
+</problems>
 
 <facts>
 {hints}
 </facts>
 
-Fix every error. Keep the mod's features the same. Output ONLY the files you change, each COMPLETE, in this format:
+Fix every problem. Keep all of the mod's features - never delete a feature to make an error go away. Output ONLY the files you change, each COMPLETE, in this format:
 === FILE: <path> ===
 <complete file contents>
 === END FILE ==="""
