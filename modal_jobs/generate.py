@@ -46,6 +46,7 @@ compile_image = (
     .add_local_dir(f"templates/{VERSION}", f"{REPO_DIR}/templates/{VERSION}", copy=True)
     .add_local_dir("tools/probe", "/root/probe_src", copy=True)
     .add_local_file("tools/runtime_check.py", "/root/runtime_check.py", copy=True)
+    .add_local_file("tools/proc.py", "/root/proc.py", copy=True)  # runtime_check imports proc
     .run_commands(
         f"mkdir -p {REPO_DIR}/.work && cp -r {REPO_DIR}/templates/{VERSION} {REPO_DIR}/.work/{VERSION}",
         f"cd {REPO_DIR}/.work/{VERSION} && chmod +x gradlew && ./gradlew compileJava compileClientJava --console=plain --no-daemon",
