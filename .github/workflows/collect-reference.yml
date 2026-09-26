@@ -33,7 +33,7 @@ jobs:
         run: |
           python tools/collect_reference.py --docs ext/fabric-docs --api ext/fabric \
             --version "${{ inputs.version }}" --out reference \
-            --jar-search ~/.gradle "templates/${{ inputs.version }}/.gradle"
+            --jar-search "templates/${{ inputs.version }}/.gradle" ~/.gradle
       - name: upload to Hugging Face (private)
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}

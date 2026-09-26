@@ -57,12 +57,17 @@ def invalid_json_files(src: Path) -> list[str]:
 
 
 def extract_errors(output: str, limit: int = 20) -> list[str]:
-    """Pull javac error lines (plus the line after each, which shows the code) out of Gradle output."""
+    """Pull javac errors out of Gradle output: the error line, the code, and any symbol/location lines."""
     lines = output.splitlines()
     errors = []
     for i, line in enumerate(lines):
         if ERROR_LINE.search(line):
-            errors.append("\n".join(lines[i:i + 3]).strip())
+            block = [line]
+            for follow in lines[i + 1:i + 7]:
+                if ERROR_LINE.search(follow) or follow.startswith(("> Task", "FAILURE", "BUILD")) or re.match(r"^\d+ errors?$", follow.strip()):
+                    break
+                block.append(follow)
+            errors.append("\n".join(block).strip())
     if not errors:
         # Not a javac error (bad fabric.mod.json expansion, Gradle failure...). Keep the tail.
         errors = ["\n".join(line for line in lines if line.strip())[-2000:]]

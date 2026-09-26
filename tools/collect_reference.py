@@ -88,7 +88,9 @@ def collect_fabric_api(api_root: Path, version: str):
 def find_minecraft_jars(search_dirs: list[Path]) -> list[Path]:
     """Loom's Mojang-mapped game jars: the ones containing Minecraft classes."""
     jars = []
-    for jar in (j for d in search_dirs if d.exists() for j in d.rglob("*.jar")):
+    # Search order matters: the project's loom-cache jars have Fabric's access wideners applied
+    # (e.g. CreativeModeTabs keys become public), which is what mods actually compile against.
+    for jar in (j for d in search_dirs if d.exists() for j in sorted(d.rglob("*.jar"))):
         name = jar.name.lower()
         if "minecraft" not in name or "sources" in name or jar.stat().st_size < 5_000_000:
             continue
@@ -115,7 +117,8 @@ def collect_minecraft_signatures(jars: list[Path], version: str, batch: int = 30
         classes = [c for c in classes if c not in seen]
         seen.update(classes)
         for start in range(0, len(classes), batch):
-            out = subprocess.run(["javap", "-public", "-cp", str(jar), *classes[start:start + batch]],
+            # -protected: mods override protected methods (codec, createBlockStateDefinition, useWithoutItem...)
+            out = subprocess.run(["javap", "-protected", "-cp", str(jar), *classes[start:start + batch]],
                                  capture_output=True, text=True).stdout
             for block in re.split(r"(?m)^Compiled from .*\n", out):
                 block = block.strip()
