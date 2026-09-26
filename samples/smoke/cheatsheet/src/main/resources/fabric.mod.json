@@ -1,0 +1,19 @@
+{
+	"schemaVersion": 1,
+	"id": "sheet",
+	"version": "${version}",
+	"name": "Sheet",
+	"description": "Adds a ruby item.",
+	"authors": ["Nullified AI"],
+	"license": "CC0-1.0",
+	"environment": "*",
+	"entrypoints": {
+		"main": ["com.nullified.sheet.SheetMod"]
+	},
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "~1.21.11",
+		"java": ">=21",
+		"fabric-api": "*"
+	}
+}
