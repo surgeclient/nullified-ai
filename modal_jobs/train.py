@@ -21,7 +21,12 @@ cache = modal.Volume.from_name("nullified-cache", create_if_missing=True)
 image = (
     modal.Image.from_registry("nvidia/cuda:13.0.2-devel-ubuntu24.04", add_python="3.12")
     .pip_install("torch", "transformers", "peft", "trl", "accelerate", "datasets", "huggingface_hub",
-                 "flash-linear-attention")
+                 "flash-linear-attention", "ninja", "packaging", "wheel")
+    # Qwen3.5's linear-attention layers fall back to a much slower PyTorch path without this kernel.
+    # Compiled for H100 (sm_90) at image build time, which runs on CPU.
+    .apt_install("build-essential", "git")
+    .env({"TORCH_CUDA_ARCH_LIST": "9.0", "MAX_JOBS": "8", "CXX": "g++", "CC": "gcc"})
+    .pip_install("causal-conv1d", extra_options="--no-build-isolation")
     .env({"HF_HOME": "/cache/hf", "CUDA_HOME": "/usr/local/cuda"})
     .add_local_dir("tools", f"{REPO_DIR}/tools")
     .add_local_file("restrictions.txt", f"{REPO_DIR}/restrictions.txt")
@@ -39,6 +44,39 @@ def load_base(name: str):
         return transformers.AutoModelForImageTextToText.from_pretrained(name, **kwargs)
 
 
+GRAD_ACCUM = 8
+
+
+def make_configs(n_examples: int, epochs: float, lr: float, rank: int, max_length: int, gpu: bool = True,
+                 max_steps: int = -1):
+    from peft import LoraConfig
+    from trl import SFTConfig
+    steps = max(1, int(n_examples * epochs / GRAD_ACCUM))
+    config = SFTConfig(
+        output_dir="/tmp/out", num_train_epochs=epochs, learning_rate=lr, lr_scheduler_type="cosine",
+        warmup_steps=max(1, steps // 20), per_device_train_batch_size=1, gradient_accumulation_steps=GRAD_ACCUM,
+        gradient_checkpointing=True, bf16=gpu, use_cpu=not gpu, max_length=max_length,
+        logging_steps=5 if max_steps <= 0 else 1,
+        save_strategy="no", report_to=[], completion_only_loss=True,
+        max_steps=max_steps,
+    )
+    # Language-model projections only (Qwen3.5 checkpoints also contain a vision tower). These module
+    # names are the ones vLLM can serve LoRA on, so the adapter loads at use time.
+    lora = LoraConfig(r=rank, lora_alpha=rank * 2, lora_dropout=0.05, task_type="CAUSAL_LM",
+                      target_modules=r"^(?!.*visual).*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)$")
+    return config, lora
+
+
+@app.function(image=image, cpu=2, timeout=600)
+def validate_configs() -> str:
+    """CPU-only check that the training settings are accepted by the installed library versions."""
+    import peft
+    import transformers
+    import trl
+    make_configs(100, 3.0, 1e-4, 32, 16384, gpu=False)
+    return f"configs OK (transformers {transformers.__version__}, trl {trl.__version__}, peft {peft.__version__})"
+
+
 @app.function(image=image, volumes={"/cache": cache}, timeout=3600, cpu=2,
               secrets=[modal.Secret.from_name("huggingface")])
 def prefetch_base() -> str:
@@ -52,14 +90,13 @@ def prefetch_base() -> str:
 @app.function(image=image, gpu=GPU, volumes={"/cache": cache}, timeout=4 * 3600,
               secrets=[modal.Secret.from_name("huggingface")])
 def train(runs: list[str], epochs: float = 3.0, lr: float = 1e-4, rank: int = 32, max_length: int = 16384,
-          dry_run: bool = False) -> dict:
+          dry_run: bool = False, benchmark_steps: int = 0) -> dict:
     sys.path.insert(0, f"{REPO_DIR}/tools")
     import random
     from datasets import Dataset
     from huggingface_hub import HfApi, hf_hub_download
-    from peft import LoraConfig
-    from transformers import AutoTokenizer
-    from trl import SFTConfig, SFTTrainer
+    from transformers import AutoTokenizer, TrainerCallback
+    from trl import SFTTrainer
     from build_sft import build_examples, fix_examples
     from symbols import SymbolIndex
 
@@ -91,20 +128,27 @@ def train(runs: list[str], epochs: float = 3.0, lr: float = 1e-4, rank: int = 32
 
     model = load_base(BASE)
     cache.commit()
-    config = SFTConfig(
-        output_dir="/tmp/out", num_train_epochs=epochs, learning_rate=lr, lr_scheduler_type="cosine",
-        warmup_ratio=0.05, per_device_train_batch_size=1, gradient_accumulation_steps=8,
-        gradient_checkpointing=True, bf16=True, max_length=max_length, logging_steps=5,
-        save_strategy="no", report_to=[], completion_only_loss=True,
-    )
-    # Language-model projections only (Qwen3.5 checkpoints also contain a vision tower). These module
-    # names are the ones vLLM can serve LoRA on, so the adapter loads at use time.
-    lora = LoraConfig(r=rank, lora_alpha=rank * 2, lora_dropout=0.05, task_type="CAUSAL_LM",
-                      target_modules=r"^(?!.*visual).*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)$")
+    if benchmark_steps:
+        keep = keep * max(1, benchmark_steps * GRAD_ACCUM // len(keep) + 1)  # enough data for the steps
+    config, lora = make_configs(len(keep), epochs, lr, rank, max_length, max_steps=benchmark_steps or -1)
+    step_times = []
+
+    class StepTimer(TrainerCallback):
+        def on_step_end(self, args, state, control, **kwargs):
+            step_times.append(time.time())
+
     trainer = SFTTrainer(model=model, args=config, train_dataset=Dataset.from_list(keep),
-                         processing_class=tokenizer, peft_config=lora)
+                         processing_class=tokenizer, peft_config=lora, callbacks=[StepTimer()])
     trainer.model.print_trainable_parameters()
     result = trainer.train()
+    if benchmark_steps:
+        # Skip the first steps (kernel compilation / autotuning) and report the steady state.
+        gaps = [b - a for a, b in zip(step_times, step_times[1:])][1:]
+        sec_per_step = sum(gaps) / max(1, len(gaps))
+        tokens_per_step = total_tokens / max(1, len(examples)) * GRAD_ACCUM
+        return {"steps": len(step_times), "sec_per_step_steady": round(sec_per_step, 1),
+                "tokens_per_sec_steady": round(tokens_per_step / max(sec_per_step, 1e-6)),
+                "step_gaps": [round(g, 1) for g in gaps]}
 
     trainer.model.save_pretrained("/tmp/adapter")
     tokenizer.save_pretrained("/tmp/adapter")
@@ -123,7 +167,9 @@ def train(runs: list[str], epochs: float = 3.0, lr: float = 1e-4, rank: int = 32
 
 
 @app.local_entrypoint()
-def main(runs: str, epochs: float = 3.0, lr: float = 1e-4, rank: int = 32, dry_run: bool = False):
+def main(runs: str, epochs: float = 3.0, lr: float = 1e-4, rank: int = 32, dry_run: bool = False,
+         benchmark_steps: int = 0):
+    print(validate_configs.remote())  # fail on CPU, not after paying for a GPU
     print("base weights:", prefetch_base.remote())
     print(json.dumps(train.remote([r.strip() for r in runs.split(",") if r.strip()], epochs, lr, rank,
-                                  dry_run=dry_run), indent=2))
+                                  dry_run=dry_run, benchmark_steps=benchmark_steps), indent=2))
