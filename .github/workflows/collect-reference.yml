@@ -1,0 +1,48 @@
+# Collects the reference corpus (Fabric docs + reference mod, Fabric API source,
+# Minecraft signatures) and uploads it to a private Hugging Face dataset.
+name: collect-reference
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Minecraft version (needs a template + a Fabric API branch)"
+        default: "1.21.11"
+
+jobs:
+  collect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: 'microsoft'
+      - uses: gradle/actions/setup-gradle@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: clone sources
+        run: |
+          git clone -q --depth 1 https://github.com/FabricMC/fabric-docs ext/fabric-docs
+          git clone -q --depth 1 --branch "${{ inputs.version }}" https://github.com/FabricMC/fabric ext/fabric
+      - name: set up Minecraft (mapped jars for signatures)
+        working-directory: templates/${{ inputs.version }}
+        run: chmod +x gradlew && ./gradlew compileJava compileClientJava --console=plain
+      - name: collect
+        run: |
+          python tools/collect_reference.py --docs ext/fabric-docs --api ext/fabric \
+            --version "${{ inputs.version }}" --out reference \
+            --jar-search ~/.gradle "templates/${{ inputs.version }}/.gradle"
+      - name: upload to Hugging Face (private)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          pip install -q huggingface_hub
+          python tools/upload_hf.py --folder reference --repo nullified-ai-reference --path-in-repo "${{ inputs.version }}"
+      - name: summary
+        run: |
+          echo "## Reference corpus" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          cat reference/manifest.json >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
