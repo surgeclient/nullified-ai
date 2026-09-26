@@ -39,6 +39,16 @@ def load_base(name: str):
         return transformers.AutoModelForImageTextToText.from_pretrained(name, **kwargs)
 
 
+@app.function(image=image, volumes={"/cache": cache}, timeout=3600, cpu=2,
+              secrets=[modal.Secret.from_name("huggingface")])
+def prefetch_base() -> str:
+    """Download the base weights on a cheap CPU container so the GPU never waits on downloads."""
+    from huggingface_hub import snapshot_download
+    path = snapshot_download(BASE, cache_dir="/cache/hf", token=os.environ["HF_TOKEN"])
+    cache.commit()
+    return path
+
+
 @app.function(image=image, gpu=GPU, volumes={"/cache": cache}, timeout=4 * 3600,
               secrets=[modal.Secret.from_name("huggingface")])
 def train(runs: list[str], epochs: float = 3.0, lr: float = 1e-4, rank: int = 32, max_length: int = 16384,
@@ -114,5 +124,6 @@ def train(runs: list[str], epochs: float = 3.0, lr: float = 1e-4, rank: int = 32
 
 @app.local_entrypoint()
 def main(runs: str, epochs: float = 3.0, lr: float = 1e-4, rank: int = 32, dry_run: bool = False):
+    print("base weights:", prefetch_base.remote())
     print(json.dumps(train.remote([r.strip() for r in runs.split(",") if r.strip()], epochs, lr, rank,
                                   dry_run=dry_run), indent=2))
