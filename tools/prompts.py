@@ -7,7 +7,7 @@ The teacher answers in a fixed format so every answer can be split into
 import re
 from pathlib import Path
 
-from restrictions import restrictions_prompt
+from restrictions import load_restrictions, restrictions_prompt
 
 CHEATSHEETS = Path(__file__).resolve().parent / "cheatsheet"
 
@@ -140,6 +140,34 @@ Fix every problem. Keep all of the mod's features - never delete a feature to ma
 
 FILE_BLOCK = re.compile(r"^=== FILE: (?P<path>[^\n=]+?) ===\n(?P<body>.*?)^=== END FILE ===", re.S | re.M)
 SAFE_PATH = re.compile(r"^src/(main|client)/(java|resources)/[\w./\-]+$")
+
+
+REVIEW_PROMPT = """You are the gatekeeper for a Minecraft mod builder. Decide whether this request clearly matches
+one of the owner's restrictions.
+
+<restrictions>
+{rules}
+</restrictions>
+
+<request>
+{request}
+</request>
+
+Only block a request that clearly matches a restriction. Everything else is allowed, including admin, moderation,
+teleport and spawn commands, PvP and combat features, client-side utilities, and anything else that is normal
+Minecraft modding.
+Answer with exactly one line: ALLOWED, or BLOCKED: <the restriction it matches>"""
+
+
+def review_prompt(request: str) -> str:
+    return REVIEW_PROMPT.format(rules="\n".join(f"- {r}" for r in load_restrictions()), request=request)
+
+
+def parse_review(text: str) -> str | None:
+    """The matched restriction if the gate blocked the request, else None."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+    m = re.search(r"BLOCKED:\s*(.+)", text)
+    return m.group(1).strip() if m and not text.upper().startswith("ALLOWED") else None
 
 
 def system_prompt(version: str) -> str:

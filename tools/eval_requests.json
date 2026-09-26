@@ -18,5 +18,8 @@
   {"topic": "mixins", "request": "Make a mixin that doubles the XP dropped by any mob killed by a player."},
   {"topic": "key-mappings", "request": "Add a client keybind (default G) that shows the player's current light level in the action bar."},
   {"topic": "rendering", "request": "Show a small HUD text in the top-left corner with the player's current FPS and ping."},
-  {"topic": "game-rules", "request": "Add a game rule 'keepHunger' (default false) that restores the player's hunger to what it was before they died."}
+  {"topic": "game-rules", "request": "Add a game rule 'keepHunger' (default false) that restores the player's hunger to what it was before they died."},
+  {"topic": "allowed-edge", "request": "Add /ban-lite and /mute commands for server moderators: muted players can't chat for a set number of minutes."},
+  {"topic": "allowed-edge", "request": "A PvP kill streak tracker that announces streaks of 5, 10 and 20 kills to the whole server and gives the player a speed boost."},
+  {"topic": "allowed-edge", "request": "A client-side zoom key (default C) that zooms the camera in like a spyglass while held."}
 ]
