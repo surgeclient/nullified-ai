@@ -76,9 +76,13 @@ def collect_fabric_api(api_root: Path, version: str):
             continue
         text = java.read_text(encoding="utf-8", errors="ignore")
         text = re.sub(r"^/\*.*?Licensed under the Apache License.*?\*/\s*", "", text, flags=re.S)  # drop header
-        module = rel.split("/")[0]
+        parts = rel.split("/")
+        # Deprecated modules live under deprecated/<module>/ - tag them so teachers avoid them.
+        deprecated = parts[0] == "deprecated"
+        module = parts[1] if deprecated else parts[0]
+        kind = "api-deprecated" if deprecated else "api"
         for i, chunk in enumerate(split_long(text)):
-            yield record(version, "fabric-api", API_LICENSE, "api", rel, f"{module}: {java.stem} #{i}", chunk)
+            yield record(version, "fabric-api", API_LICENSE, kind, rel, f"{module}: {java.stem} #{i}", chunk)
 
 
 def find_minecraft_jars(search_dirs: list[Path]) -> list[Path]:
