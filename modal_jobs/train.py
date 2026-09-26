@@ -10,7 +10,8 @@ import time
 
 import modal
 
-BASE = "Qwen/Qwen3.5-9B"
+# Train QLoRA (4-bit) on the bf16 27B so it fits one GPU; the adapter is served on the FP8 27B in nullified.py.
+BASE = "Qwen/Qwen3.8-27B"
 VERSION = "1.21.11"
 GPU = "H100"
 GPU_USD_PER_HOUR = 3.95
@@ -22,25 +23,31 @@ image = (
     modal.Image.from_registry("nvidia/cuda:13.0.2-devel-ubuntu24.04", add_python="3.12")
     .pip_install("torch", "transformers", "peft", "trl", "accelerate", "datasets", "huggingface_hub",
                  "flash-linear-attention", "ninja", "packaging", "wheel")
-    # Qwen3.5's linear-attention layers fall back to a much slower PyTorch path without this kernel.
+    # Qwen3.x's linear-attention layers fall back to a much slower PyTorch path without this kernel.
     # Compiled for H100 (sm_90) at image build time, which runs on CPU.
     .apt_install("build-essential", "git")
     .env({"TORCH_CUDA_ARCH_LIST": "9.0", "MAX_JOBS": "8", "CXX": "g++", "CC": "gcc"})
     .pip_install("causal-conv1d", extra_options="--no-build-isolation")
+    .pip_install("bitsandbytes")  # after causal-conv1d so its slow compiled layer stays cached
     .env({"HF_HOME": "/cache/hf", "CUDA_HOME": "/usr/local/cuda"})
     .add_local_dir("tools", f"{REPO_DIR}/tools")
     .add_local_file("restrictions.txt", f"{REPO_DIR}/restrictions.txt")
 )
 
 
-def load_base(name: str):
+def load_base(name: str, quant_4bit: bool = True):
     import torch
     import transformers
     kwargs = {"dtype": torch.bfloat16, "cache_dir": "/cache/hf"}
+    if quant_4bit:
+        # 4-bit QLoRA: a 27B base fits in ~16GB, leaving room for activations at seq 16k.
+        kwargs["quantization_config"] = transformers.BitsAndBytesConfig(
+            load_in_4bit=True, bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True)
     try:
         return transformers.AutoModelForCausalLM.from_pretrained(name, **kwargs)
     except (ValueError, KeyError):
-        # Qwen3.5 checkpoints are multimodal; fall back to the image-text class and train its language model.
+        # Qwen3.x checkpoints are multimodal; fall back to the image-text class and train its language model.
         return transformers.AutoModelForImageTextToText.from_pretrained(name, **kwargs)
 
 
@@ -126,7 +133,9 @@ def train(runs: list[str], epochs: float = 3.0, lr: float = 1e-4, rank: int = 32
     if dry_run or not keep:
         return {"examples": len(examples), "kept": len(keep), "kinds": kinds, "tokens_per_epoch": total_tokens}
 
+    from peft import prepare_model_for_kbit_training
     model = load_base(BASE)
+    model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
     cache.commit()
     if benchmark_steps:
         keep = keep * max(1, benchmark_steps * GRAD_ACCUM // len(keep) + 1)  # enough data for the steps

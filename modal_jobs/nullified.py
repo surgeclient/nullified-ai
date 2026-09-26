@@ -21,7 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from generate import REPO_DIR, VERSION, compile_batch, compile_image  # noqa: E402
 from generate import app as checks_app  # noqa: E402
 
-BASE = "Qwen/Qwen3.5-9B"
+# The FP8 27B fits on one L40S (48GB); the adapter trained on the bf16 27B applies to the same layers.
+BASE = "Qwen/Qwen3.8-27B-FP8"
 ADAPTER_REPO = "nullified-ai-lora"
 GPU = "L40S"
 
@@ -81,22 +82,25 @@ def solve(requests: list[str], use_adapter: bool = True, fix_rounds: int = 3) ->
     """Run the plan -> write -> check -> fix loop for each request. Returns one record per request."""
     sys.path.insert(0, f"{REPO_DIR}/tools")
     from huggingface_hub import HfApi, hf_hub_download, snapshot_download
-    from prompts import (FIX_PROMPT, STAGE_EXPLAINED, STUDENT_SOLVE_PROMPT, format_files, looks_looped,
+    from prompts import (FIX_PROMPT, SOLVE_PROMPT, STAGE_EXPLAINED, format_files, looks_looped,
                          parse_answer, parse_review, review_prompt, runtime_hints, system_prompt)
+    from retrieval import ReferenceIndex
     from symbols import SymbolIndex
     from vllm import LLM, SamplingParams
     from vllm.lora.request import LoRARequest
 
     token = os.environ["HF_TOKEN"]
     user = HfApi(token=token).whoami()["name"]
-    symbols = SymbolIndex.load(hf_hub_download(f"{user}/nullified-ai-reference", f"{VERSION}/minecraft-{VERSION}.jsonl",
-                                               repo_type="dataset", token=token))
+    ref_dir = snapshot_download(f"{user}/nullified-ai-reference", repo_type="dataset", token=token,
+                                allow_patterns=[f"{VERSION}/*"], local_dir="/tmp/reference")
+    index = ReferenceIndex.load(f"{ref_dir}/{VERSION}", VERSION)  # 1.21.11 docs + signatures for the first attempt
+    symbols = SymbolIndex.load(f"{ref_dir}/{VERSION}/minecraft-{VERSION}.jsonl")
     lora = None
     if use_adapter:
         path = snapshot_download(f"{user}/{ADAPTER_REPO}", token=token, local_dir="/tmp/adapter")
         lora = LoRARequest("nullified", 1, path)
-    llm = LLM(model=BASE, download_dir="/cache/hf", max_model_len=32768, gpu_memory_utilization=0.9,
-              enable_lora=use_adapter, max_lora_rank=64, max_num_seqs=64)
+    llm = LLM(model=BASE, download_dir="/cache/hf", max_model_len=30000, gpu_memory_utilization=0.92,
+              enable_lora=use_adapter, max_lora_rank=64, max_num_seqs=8)  # 27B FP8 leaves less room for KV cache
     system = system_prompt(VERSION)
 
     def chat_full(prompts: list[str], temperature: float, max_tokens: int = 14000, repetition_penalty: float = 1.05) -> list:
@@ -119,7 +123,9 @@ def solve(requests: list[str], use_adapter: bool = True, fix_rounds: int = 3) ->
                for i, (req, rule) in enumerate(zip(requests, blocked))]
 
     allowed = [r for r in records if not r["refused"]]
-    solve_prompts = [STUDENT_SOLVE_PROMPT.format(version=VERSION, request=r["request"]) for r in allowed]
+    solve_prompts = [SOLVE_PROMPT.format(version=VERSION, request=r["request"],
+                                         reference=index.context_for(r["request"], budget_chars=36000))
+                     for r in allowed]
     outs = chat_full(solve_prompts, 0.4)
     # Answers that got stuck repeating themselves or ran out of tokens get one retry with more varied sampling.
     retry = [i for i, o in enumerate(outs) if stuck(o)]
