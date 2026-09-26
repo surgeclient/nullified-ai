@@ -21,6 +21,7 @@ from pathlib import Path
 
 MAX_CHARS = 8000
 DOCS_LICENSE = "CC-BY-NC-SA-4.0"
+LIBRARY_JARS = ("authlib-", "brigadier-", "datafixerupper-")
 API_LICENSE = "Apache-2.0"
 
 
@@ -92,6 +93,9 @@ def find_minecraft_jars(search_dirs: list[Path]) -> list[Path]:
     # (e.g. CreativeModeTabs keys become public), which is what mods actually compile against.
     for jar in (j for d in search_dirs if d.exists() for j in sorted(d.rglob("*.jar"))):
         name = jar.name.lower()
+        if name.startswith(LIBRARY_JARS) and "sources" not in name:
+            jars.append(jar)  # Mojang libraries mods use directly (GameProfile, Brigadier, Codecs)
+            continue
         if "minecraft" not in name or "sources" in name or jar.stat().st_size < 5_000_000:
             continue
         try:

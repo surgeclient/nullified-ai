@@ -68,6 +68,11 @@ def extract_errors(output: str, limit: int = 20) -> list[str]:
                     break
                 block.append(follow)
             errors.append("\n".join(block).strip())
+    # Gradle repeats every javac error in its failure summary (indented) - keep one copy of each.
+    unique = {}
+    for e in errors:
+        unique.setdefault(" ".join(e.split()), e)
+    errors = list(unique.values())
     if not errors:
         # Not a javac error (bad fabric.mod.json expansion, Gradle failure...). Keep the tail.
         errors = ["\n".join(line for line in lines if line.strip())[-2000:]]

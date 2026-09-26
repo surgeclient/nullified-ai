@@ -32,8 +32,9 @@ def restrictions_prompt() -> str:
     """Restrictions formatted for a model prompt."""
     rules = "\n".join(f"- {rule}" for rule in load_restrictions())
     return (
-        "You must refuse any request that matches one of these restrictions. "
-        "Everything not listed is allowed.\n" + rules
+        "Refuse ONLY requests that clearly match one of these restrictions. Everything else is allowed and must be "
+        "built without warnings or lectures - including admin/teleport/spawn commands, PvP and combat features, "
+        "client-side utilities, and anything else that is normal Minecraft modding.\n" + rules
     )
 
 

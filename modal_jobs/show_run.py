@@ -19,13 +19,21 @@ def show(run: str, show_files: str = "", max_errors: int = 6) -> str:
 
     token = os.environ["HF_TOKEN"]
     repo = f"{HfApi(token=token).whoami()['name']}/nullified-ai-data"
-    path = hf_hub_download(repo, f"compiled/{run}.jsonl", repo_type="dataset", token=token)
+    try:  # generator runs with the fix loop store results in raw/; GitHub-compiled runs in compiled/
+        path = hf_hub_download(repo, f"compiled/{run}.jsonl", repo_type="dataset", token=token)
+    except Exception:
+        path = hf_hub_download(repo, f"raw/{run}.jsonl", repo_type="dataset", token=token)
     recs = [json.loads(l) for l in open(path, encoding="utf-8")]
 
     out = [f"{sum(r['ok'] for r in recs)}/{len(recs)} compiled"]
     symbols = collections.Counter()
     for r in recs:
         out.append(f"\n## {r['id']} [{r['topic']}] {r['stage']} - {r['request'][:110]}")
+        if r.get("refused"):
+            out.append(f"  REFUSED: {r['refused']}")
+        if r.get("attempts"):
+            out.append("  errors per attempt: " + " -> ".join(str(len(a["errors"])) for a in r["attempts"])
+                       + f" -> {len(r['errors'])} | files changed: " + ", ".join(str(len(a["changed"])) for a in r["attempts"]))
         for e in r["errors"][:max_errors]:
             short = re.sub(r"^.*?/src/", "src/", e.replace("\n", " | "))
             out.append("  " + short[:300])
