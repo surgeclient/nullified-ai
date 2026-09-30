@@ -3,11 +3,13 @@
 A team of specialist AI models (one base model + LoRA adapters) trained to write
 Fabric Minecraft mods for 1.21.11 and newer.
 
-## Run it free on your own GPU
-No Modal needed: see [`local/README.md`](local/README.md). The model runs on your GPU with Ollama, and the
-compile/test/packaging runs on GitHub Actions, so only the model (about 5 GB) is stored on your PC.
+## Run it free (no Modal)
+See [`local/README.md`](local/README.md). The model runs on a free online API (30B+ models, no disk space) with
+a small fallback on your own GPU. Compiling, testing and packaging run on GitHub Actions. Only
+`restrictions.txt` decides what gets refused.
 ```
-python local/nullified_local.py build --request "a ruby sword that sets mobs on fire"
+python local/nullified_local.py models
+python local/nullified_local.py build --model <id> --request "a ruby sword that sets mobs on fire"
 ```
 
 ## Layout
@@ -18,7 +20,7 @@ python local/nullified_local.py build --request "a ruby sword that sets mobs on 
 | `samples/` | Mod samples (each is a `src/` folder). `samples/smoke/` holds pipeline tests |
 | `tools/batch_compile.py` | Compile-checks many samples with one warm Gradle setup |
 | `tools/build_mod.py` | Builds one sample into a `.jar` + project `.zip` |
-| `local/nullified_local.py` | Runs the whole pipeline without Modal (model on your GPU, checks on GitHub Actions) |
+| `local/nullified_local.py` | Runs the whole pipeline without Modal (free online model + GPU fallback, checks on GitHub Actions) |
 | `tools/mod_checks.py` | Compile + real-server + asset checks and packaging, used by the `check-mod` workflow |
 | `tools/restrictions.py` | Loads `restrictions.txt` and scans code for harmful patterns |
 | `.github/workflows/` | `compile-check` (batch), `build-mod` (jar + zip), `collect-reference` (corpus → HF), `check-mod` (used by the local runner); all run manually |
