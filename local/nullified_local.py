@@ -44,6 +44,7 @@ PROVIDERS = {  # name -> (api base, env var holding the key, where to get a free
     "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY", "https://console.groq.com/keys"),
     "cerebras": ("https://api.cerebras.ai/v1", "CEREBRAS_API_KEY", "https://cloud.cerebras.ai"),
     "ollama": ("http://localhost:11434", "", "https://ollama.com/download"),
+    "server": ("http://127.0.0.1:8080/v1", "", ""),  # llama.cpp llama-server (what the GitHub runner uses)
 }
 
 
@@ -87,7 +88,7 @@ class Model:
             if self.openai:
                 body = {"model": self.model, "messages": messages, "temperature": temperature, "top_p": 0.95,
                         "max_tokens": max_tokens}
-                extras = {"repetition_penalty": repetition_penalty, "chat_template_kwargs": {"enable_thinking": False}}
+                extras = {"repetition_penalty": repetition_penalty, "chat_template_kwargs": {"enable_thinking": False, "reasoning_effort": "low"}}
                 try:
                     out = self._post("/chat/completions", {**body, **extras} if self.extras_ok else body)
                 except urllib.error.HTTPError as e:
@@ -353,6 +354,11 @@ def solve(llm: Team, checker: Checker, index, symbols, requests: list[str], fix_
 def cmd_build(args, llm: Team, checker, index, symbols):
     started = time.time()
     rec = solve(llm, checker, index, symbols, [args.request], args.fix_rounds)[0]
+    out = ROOT / "output"
+    out.mkdir(exist_ok=True)
+    # Everything about the attempt, so a build that ran somewhere else (GitHub runner) can be inspected.
+    (out / "result.json").write_text(json.dumps({k: v for k, v in rec.items() if k != "first_answer"}, indent=2),
+                                     encoding="utf-8")
     if rec["refused"]:
         print(f"Refused: {rec['refused']}")
         return

@@ -1,4 +1,11 @@
-# Run Nullified AI free, without Modal
+# Nullified AI without Modal
+
+**Recommended: everything on GitHub.** The model runs on GitHub's free servers and your PC only starts the job:
+see [`runner/README.md`](../runner/README.md), then run
+`python local/nullified_remote.py --request "..."`.
+
+The rest of this page covers the other option: a free online API for the model, with checks on GitHub.
+
 
 - **The model** is a big (30B+) model on a free online API: OpenRouter (default), Groq or Cerebras. It uses no
   disk space. If you'd rather use your own GPU, use `--provider ollama`.

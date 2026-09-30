@@ -1,0 +1,126 @@
+# Nullified AI runner: builds a Minecraft mod on GitHub's free servers.
+# The model (gpt-oss-20b, or your own trained version) runs on this server's CPU, then the mod is compiled,
+# booted on a real 1.21.11 server, fixed if needed, and packaged. Nothing runs on your PC.
+#
+# Start it from the Actions tab (Run workflow) or with local/nullified_remote.py in nullified-ai.
+# This repo is public (so the free servers have 16 GB RAM); the pipeline code is checked out from the
+# private nullified-ai repo with the NULLIFIED_TOKEN secret, and the model/docs come from Hugging Face.
+name: build
+run-name: "${{ inputs.request }} [${{ inputs.job_id }}]"
+on:
+  workflow_dispatch:
+    inputs:
+      request:
+        description: "The mod you want"
+        required: true
+      fix_rounds:
+        description: "How many times the model may fix failed checks"
+        default: "3"
+      model_repo:
+        description: "Hugging Face repo with the model (.gguf)"
+        default: "ggml-org/gpt-oss-20b-GGUF"
+      model_file:
+        description: ".gguf file in that repo"
+        default: "gpt-oss-20b-mxfp4.gguf"
+      ref:
+        description: "nullified-ai branch to use"
+        default: "main"
+      job_id:
+        description: "Leave as is (used by nullified_remote.py)"
+        default: "manual"
+
+concurrency:
+  group: build-${{ inputs.job_id }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      MODEL_DIR: /mnt/model
+    steps:
+      - name: free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo mkdir -p $MODEL_DIR && sudo chown $USER $MODEL_DIR
+          df -h / /mnt; free -g
+      - uses: actions/checkout@v6
+        with:
+          repository: surgeclient/nullified-ai
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.NULLIFIED_TOKEN }}
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: 'microsoft'
+      - uses: gradle/actions/setup-gradle@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/cache@v4
+        with:
+          path: .work/probe.jar
+          key: probe-${{ hashFiles('tools/probe/**', 'templates/1.21.11/**') }}
+      - name: install llama.cpp
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          url=$(gh api repos/ggml-org/llama.cpp/releases/latest --jq '.assets[] | select(.name | test("bin-ubuntu-x64\\.(zip|tar\\.gz)$")) | .browser_download_url' | head -1)
+          echo "llama.cpp: $url"
+          mkdir -p /mnt/llama && cd /mnt/llama && curl -sSL "$url" -o pkg
+          (unzip -q pkg || tar xzf pkg) && rm pkg
+          bin=$(dirname "$(find /mnt/llama -name llama-server -type f | head -1)")
+          echo "$bin" >> $GITHUB_PATH
+          echo "LD_LIBRARY_PATH=$bin:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+      - name: download model + reference docs
+        env:
+          MODEL_REPO: ${{ inputs.model_repo }}
+          MODEL_FILE: ${{ inputs.model_file }}
+        run: |
+          pip install -q huggingface_hub
+          python -c "import os; from huggingface_hub import hf_hub_download as d; print(d(os.environ['MODEL_REPO'], os.environ['MODEL_FILE'], local_dir=os.environ['MODEL_DIR'], token=os.environ.get('HF_TOKEN') or None))"
+      - name: start the model
+        env:
+          MODEL_FILE: ${{ inputs.model_file }}
+        run: |
+          # The weights are memory-mapped, so while Gradle/Minecraft run, Linux can borrow that RAM back.
+          nohup llama-server -m "$MODEL_DIR/$MODEL_FILE" --host 127.0.0.1 --port 8080 -c 24576 -np 1 \
+            -t $(nproc) --jinja > /mnt/llama-server.log 2>&1 &
+          for i in $(seq 1 120); do curl -sf http://127.0.0.1:8080/health >/dev/null && echo "model ready" && exit 0; sleep 5; done
+          tail -50 /mnt/llama-server.log; exit 1
+      - name: build the mod
+        env:
+          REQUEST: ${{ inputs.request }}
+          FIX_ROUNDS: ${{ inputs.fix_rounds }}
+        run: |
+          python local/nullified_local.py build --provider server --model nullified --context 24576 \
+            --checks local --fallback-model none --fix-rounds "$FIX_ROUNDS" --request "$REQUEST"
+      - name: summary
+        if: always()
+        run: |
+          python - >> $GITHUB_STEP_SUMMARY <<'PY'
+          import json, pathlib
+          p = pathlib.Path("output/result.json")
+          if not p.exists():
+              print("No result (the build crashed - see the logs)."); raise SystemExit
+          r = json.loads(p.read_text())
+          print(f"## {'✅ Built' if r['ok'] else '❌ ' + ('Refused' if r['refused'] else 'Failed')}")
+          print(f"**Request:** {r['request']}\n")
+          if r["refused"]: print(f"**Refused:** {r['refused']}\n")
+          print(f"**Checks per round:** {' → '.join(str(s) for s in r['stage_history'])}\n")
+          if r["plan"]: print(f"**Plan:**\n```\n{r['plan']}\n```")
+          if not r["ok"] and r["errors"]: print("**Last problems:**\n```\n" + "\n\n".join(e[:500] for e in r["errors"][:5]) + "\n```")
+          jars = list(pathlib.Path("output").glob("*/*.jar"))
+          if jars: print(f"\nDownload **mod** from the Artifacts section below: `{jars[0].name}`")
+          PY
+          tail -5 /mnt/llama-server.log || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mod
+          path: |
+            output/*/*.jar
+            output/*/*.zip
+            output/result.json
+          retention-days: 7

@@ -4,7 +4,8 @@ A team of specialist AI models (one base model + LoRA adapters) trained to write
 Fabric Minecraft mods for 1.21.11 and newer.
 
 ## Run it free (no Modal)
-See [`local/README.md`](local/README.md). The model runs on a free online API (30B+ models, no disk space) with
+Everything on GitHub (model included): [`runner/README.md`](runner/README.md), then
+`python local/nullified_remote.py --request "..."`. Or use a free online API: See [`local/README.md`](local/README.md). The model runs on a free online API (30B+ models, no disk space) with
 a small fallback on your own GPU. Compiling, testing and packaging run on GitHub Actions. Only
 `restrictions.txt` decides what gets refused.
 ```
