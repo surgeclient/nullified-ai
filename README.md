@@ -3,6 +3,13 @@
 A team of specialist AI models (one base model + LoRA adapters) trained to write
 Fabric Minecraft mods for 1.21.11 and newer.
 
+## Run it free on your own GPU
+No Modal needed: see [`local/README.md`](local/README.md). The model runs on your GPU with Ollama, and the
+compile/test/packaging runs on GitHub Actions, so only the model (about 5 GB) is stored on your PC.
+```
+python local/nullified_local.py build --request "a ruby sword that sets mobs on fire"
+```
+
 ## Layout
 | Path | What it is |
 |---|---|
@@ -11,8 +18,10 @@ Fabric Minecraft mods for 1.21.11 and newer.
 | `samples/` | Mod samples (each is a `src/` folder). `samples/smoke/` holds pipeline tests |
 | `tools/batch_compile.py` | Compile-checks many samples with one warm Gradle setup |
 | `tools/build_mod.py` | Builds one sample into a `.jar` + project `.zip` |
+| `local/nullified_local.py` | Runs the whole pipeline without Modal (model on your GPU, checks on GitHub Actions) |
+| `tools/mod_checks.py` | Compile + real-server + asset checks and packaging, used by the `check-mod` workflow |
 | `tools/restrictions.py` | Loads `restrictions.txt` and scans code for harmful patterns |
-| `.github/workflows/` | `compile-check` (batch), `build-mod` (jar + zip), `collect-reference` (corpus → HF); all run manually |
+| `.github/workflows/` | `compile-check` (batch), `build-mod` (jar + zip), `collect-reference` (corpus → HF), `check-mod` (used by the local runner); all run manually |
 
 ## Versions (1.21.11 template)
 Minecraft 1.21.11 · Fabric Loader 0.19.5 · Fabric API 0.141.6+1.21.11 · Mojang mappings

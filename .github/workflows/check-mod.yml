@@ -1,0 +1,45 @@
+# Checks (or packages) mods written by a model running on your own PC, so your PC never needs
+# Gradle or Minecraft. Started by local/nullified_local.py through the GitHub API; results come back
+# as the "results" artifact (results.json, plus the .jar and project .zip when packaging).
+name: check-mod
+run-name: check-mod ${{ inputs.job_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: "Id the local runner uses to find this run"
+        required: true
+      payload:
+        description: "gzip + base64 of job.json ({items: [{id, files}], package})"
+        required: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: 'microsoft'
+      - uses: gradle/actions/setup-gradle@v6  # caches Gradle + the downloaded/remapped Minecraft between runs
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/cache@v4
+        with:
+          path: .work/probe.jar
+          key: probe-${{ hashFiles('tools/probe/**', 'templates/1.21.11/**') }}
+      - name: decode job
+        env:
+          PAYLOAD: ${{ inputs.payload }}
+        run: printf '%s' "$PAYLOAD" | base64 -d | gunzip > job.json
+      - name: check / package
+        run: python tools/mod_checks.py --job job.json --out results
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: results
+          path: results/
+          retention-days: 1
