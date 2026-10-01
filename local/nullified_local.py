@@ -367,9 +367,16 @@ def cmd_build(args, llm: Team, checker, index, symbols):
         for e in rec["errors"][:8]:
             lines = e.splitlines() or [""]
             print("  " + lines[0][:200])
+            for line in lines[1:4]:  # the offending code + the symbol javac couldn't find
+                if line.strip() and not line.strip().startswith("at "):
+                    print("    " + line.strip()[:200])
             for cause in [l.strip() for l in lines[1:] if l.strip().startswith("Caused by")][-1:]:
                 print("    " + cause[:200])  # the root cause of a crash
-        return
+        if os.environ.get("GITHUB_ACTIONS"):  # collapsible copy of the last attempt in the run log
+            print("::group::Generated files (last attempt)")
+            print(format_files(rec["files"]))
+            print("::endgroup::")
+        sys.exit(1)
     print("Packaging the .jar and project .zip...", flush=True)
     pkg = checker.package(rec["files"], ROOT / "output")
     print(f"PLAN:\n{rec['plan']}\n\nDone in {(time.time() - started) / 60:.1f} min -> {pkg['folder']}")
