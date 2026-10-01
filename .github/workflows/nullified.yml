@@ -20,8 +20,8 @@ on:
         description: "Hugging Face repo with the model (.gguf)"
         default: "ggml-org/gpt-oss-20b-GGUF"
       model_file:
-        description: ".gguf file in that repo"
-        default: "gpt-oss-20b-mxfp4.gguf"
+        description: ".gguf file in that repo (empty = pick automatically)"
+        default: ""
       job_id:
         description: "Leave as is (used by nullified_remote.py)"
         default: "manual"
@@ -91,13 +91,13 @@ jobs:
           MODEL_FILE: ${{ inputs.model_file }}
         run: |
           pip install -q huggingface_hub
-          python -c "import os; from huggingface_hub import hf_hub_download as d; print(d(os.environ['MODEL_REPO'], os.environ['MODEL_FILE'], local_dir=os.environ['MODEL_DIR'], token=os.environ.get('HF_TOKEN') or None))"
+          path=$(python tools/fetch_model.py --repo "$MODEL_REPO" --file "$MODEL_FILE" --dir "$MODEL_DIR")
+          echo "MODEL_PATH=$path" >> $GITHUB_ENV
+          ls -la "$(dirname "$path")"
       - name: start the model
-        env:
-          MODEL_FILE: ${{ inputs.model_file }}
         run: |
           # The weights are memory-mapped, so while Gradle/Minecraft run, Linux can borrow that RAM back.
-          nohup llama-server -m "$MODEL_DIR/$MODEL_FILE" --host 127.0.0.1 --port 8080 -c 24576 -np 1 \
+          nohup llama-server -m "$MODEL_PATH" --host 127.0.0.1 --port 8080 -c 24576 -np 1 \
             -t $(nproc) --jinja > $WORK/llama-server.log 2>&1 &
           for i in $(seq 1 120); do curl -sf http://127.0.0.1:8080/health >/dev/null && echo "model ready" && exit 0; sleep 5; done
           tail -50 $WORK/llama-server.log; exit 1
