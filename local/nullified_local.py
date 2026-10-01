@@ -203,9 +203,15 @@ def load_reference(folder: str):
         except ImportError:
             sys.exit("HF_TOKEN is set, so reference docs will be downloaded: pip install huggingface_hub")
         token = os.environ["HF_TOKEN"]
-        user = HfApi(token=token).whoami()["name"]
-        path = Path(snapshot_download(f"{user}/nullified-ai-reference", repo_type="dataset", token=token,
-                                      allow_patterns=[f"{VERSION}/*"], local_dir=str(ROOT / ".work" / "reference"))) / VERSION
+        try:
+            user = HfApi(token=token).whoami()["name"]
+            path = Path(snapshot_download(f"{user}/nullified-ai-reference", repo_type="dataset", token=token,
+                                          allow_patterns=[f"{VERSION}/*"],
+                                          local_dir=str(ROOT / ".work" / "reference"))) / VERSION
+        except Exception as e:  # a bad token or a missing dataset shouldn't stop the build
+            print(f"WARNING: could not download the reference docs with HF_TOKEN ({str(e).splitlines()[-1][:200]}). "
+                  "Check that the token is valid and has read access.")
+            path = None
     if path is None or not (path / f"minecraft-{VERSION}.jsonl").exists():
         print("Note: no reference docs (set HF_TOKEN or pass --reference-dir). The model will work from memory, "
               "which fails more often.")
@@ -361,9 +367,16 @@ def cmd_build(args, llm: Team, checker, index, symbols):
         for e in rec["errors"][:8]:
             lines = e.splitlines() or [""]
             print("  " + lines[0][:200])
+            for line in lines[1:4]:  # the offending code + the symbol javac couldn't find
+                if line.strip() and not line.strip().startswith("at "):
+                    print("    " + line.strip()[:200])
             for cause in [l.strip() for l in lines[1:] if l.strip().startswith("Caused by")][-1:]:
                 print("    " + cause[:200])  # the root cause of a crash
-        return
+        if os.environ.get("GITHUB_ACTIONS"):  # collapsible copy of the last attempt in the run log
+            print("::group::Generated files (last attempt)")
+            print(format_files(rec["files"]))
+            print("::endgroup::")
+        sys.exit(1)
     print("Packaging the .jar and project .zip...", flush=True)
     pkg = checker.package(rec["files"], ROOT / "output")
     print(f"PLAN:\n{rec['plan']}\n\nDone in {(time.time() - started) / 60:.1f} min -> {pkg['folder']}")
