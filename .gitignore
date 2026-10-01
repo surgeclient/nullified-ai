@@ -46,3 +46,7 @@ __pycache__/
 results/
 .work_*.log
 output/
+
+# never commit keys
+.env
+*.env

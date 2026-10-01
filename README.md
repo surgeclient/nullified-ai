@@ -3,6 +3,16 @@
 A team of specialist AI models (one base model + LoRA adapters) trained to write
 Fabric Minecraft mods for 1.21.11 and newer.
 
+## Run it free (no Modal)
+Everything on GitHub (model included): see [`local/README.md`](local/README.md), then
+`python local/nullified_remote.py --request "..."`. Or use a free online API: See [`local/README.md`](local/README.md). The model runs on a free online API (30B+ models, no disk space) with
+a small fallback on your own GPU. Compiling, testing and packaging run on GitHub Actions. Only
+`restrictions.txt` decides what gets refused.
+```
+python local/nullified_local.py models
+python local/nullified_local.py build --model <id> --request "a ruby sword that sets mobs on fire"
+```
+
 ## Layout
 | Path | What it is |
 |---|---|
@@ -11,8 +21,11 @@ Fabric Minecraft mods for 1.21.11 and newer.
 | `samples/` | Mod samples (each is a `src/` folder). `samples/smoke/` holds pipeline tests |
 | `tools/batch_compile.py` | Compile-checks many samples with one warm Gradle setup |
 | `tools/build_mod.py` | Builds one sample into a `.jar` + project `.zip` |
+| `local/nullified_local.py` | Runs the whole pipeline without Modal (free online model + GPU fallback, checks on GitHub Actions) |
+| `local/nullified_remote.py` | Starts a build on GitHub (`nullified` workflow: model + checks on GitHub's servers) and downloads the jar |
+| `tools/mod_checks.py` | Compile + real-server + asset checks and packaging, used by the `check-mod` workflow |
 | `tools/restrictions.py` | Loads `restrictions.txt` and scans code for harmful patterns |
-| `.github/workflows/` | `compile-check` (batch), `build-mod` (jar + zip), `collect-reference` (corpus → HF); all run manually |
+| `.github/workflows/` | `compile-check` (batch), `build-mod` (jar + zip), `collect-reference` (corpus → HF), `check-mod` (used by the local runner), `nullified` (whole build incl. model); all run manually |
 
 ## Versions (1.21.11 template)
 Minecraft 1.21.11 · Fabric Loader 0.19.5 · Fabric API 0.141.6+1.21.11 · Mojang mappings
