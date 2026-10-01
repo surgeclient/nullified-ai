@@ -76,6 +76,10 @@ class Model:
             except urllib.error.HTTPError as e:
                 if e.code not in (429, 502, 503) or attempt == 7:
                     raise
+                if e.code == 429:
+                    body = e.read().decode(errors="ignore")
+                    if re.search(r"per[- ]day|daily|quota", body, re.I):  # waiting won't help until tomorrow
+                        raise urllib.error.HTTPError(e.url, 429, f"daily limit reached: {body[:300]}", e.headers, None)
                 # Free tiers are rate limited: wait as long as the server asks (or back off), then retry.
                 wait = min(float(e.headers.get("Retry-After") or 0) or 10 * 2 ** attempt, 300)
                 print(f"    {self.label}: busy/rate limited ({e.code}), retrying in {wait:.0f}s...", flush=True)

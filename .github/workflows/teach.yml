@@ -1,0 +1,78 @@
+# Overnight training data: teacher models (OpenRouter / Groq / Cerebras) write mods, this server compiles and
+# boots each one on a real 1.21.11 server, and failures go back to the teacher to fix. Results are saved to your
+# private Hugging Face dataset <you>/nullified-ai-data/raw/<run>-p<part>.jsonl as the night goes on.
+#
+# Secrets: OPENROUTER_API_KEY (and/or GROQ_API_KEY, CEREBRAS_API_KEY), HF_TOKEN (write access, to save the data).
+# The data only goes to Hugging Face (private): artifacts of a public repo could be downloaded by anyone.
+name: teach
+run-name: "teach ${{ inputs.run }}"
+on:
+  workflow_dispatch:
+    inputs:
+      run:
+        description: "Name for this batch (e.g. night1) - use a new name each night"
+        required: true
+      teachers:
+        description: "Comma-separated provider:model, e.g. openrouter:<model id>,openrouter:<model id>"
+        required: true
+      per_combo:
+        description: "Mod requests per topic x difficulty (19 topics x 3 difficulties)"
+        default: "4"
+      minutes:
+        description: "Minutes per part (two parts run one after the other, so 240 = about 8 hours)"
+        default: "240"
+      parallel:
+        description: "Mods worked on at once"
+        default: "3"
+      topics:
+        description: "Comma-separated topics (empty = all)"
+        default: ""
+
+jobs:
+  teach:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    permissions:
+      contents: read
+    strategy:
+      max-parallel: 1  # parts run one after another, each up to the 6-hour job limit
+      fail-fast: false
+      matrix:
+        part: [1, 2]
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: 'microsoft'
+      - uses: gradle/actions/setup-gradle@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/cache@v4
+        with:
+          path: .work/probe.jar
+          key: probe-${{ hashFiles('tools/probe/**', 'templates/1.21.11/**') }}
+      - run: pip install -q huggingface_hub
+      - name: teach
+        env:
+          RUN: ${{ inputs.run }}-p${{ matrix.part }}
+          TEACHERS: ${{ inputs.teachers }}
+          PER_COMBO: ${{ inputs.per_combo }}
+          MINUTES: ${{ inputs.minutes }}
+          PARALLEL: ${{ inputs.parallel }}
+          TOPICS: ${{ inputs.topics }}
+          SEED: ${{ matrix.part }}
+        run: |
+          python local/teach.py --run "$RUN" --teachers "$TEACHERS" --per-combo "$PER_COMBO" \
+            --minutes "$MINUTES" --parallel "$PARALLEL" --topics "$TOPICS" --seed "$SEED" --require-hf
+      - name: summary
+        if: always()
+        run: |
+          f=$(ls output/data/*.summary.json 2>/dev/null | head -1)
+          if [ -n "$f" ]; then echo '```' >> $GITHUB_STEP_SUMMARY; cat "$f" >> $GITHUB_STEP_SUMMARY; echo '```' >> $GITHUB_STEP_SUMMARY; fi
