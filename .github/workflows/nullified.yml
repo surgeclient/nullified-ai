@@ -6,7 +6,7 @@
 # Needs the repo to be public (public repos get 16 GB RAM servers and unlimited minutes).
 # Secrets (Settings -> Secrets and variables -> Actions) are never shown in code or logs: HF_TOKEN.
 name: nullified
-run-name: "${{ inputs.request }} [${{ inputs.job_id }}]"
+run-name: "[${{ inputs.job_id }}] ${{ inputs.request }}"
 on:
   workflow_dispatch:
     inputs:
@@ -22,6 +22,10 @@ on:
       model_file:
         description: ".gguf file in that repo (empty = pick automatically)"
         default: ""
+      speculative:
+        description: "Speed up writing with the model's small draft helper, if the repo has one"
+        type: boolean
+        default: true
       job_id:
         description: "Leave as is (used by nullified_remote.py)"
         default: "manual"
@@ -58,56 +62,77 @@ jobs:
         with:
           path: .work/probe.jar
           key: probe-${{ hashFiles('tools/probe/**', 'templates/1.21.11/**') }}
+      - name: llama.cpp cache key
+        id: llama
+        # Built for this runner's CPU type, refreshed weekly.
+        run: echo "key=llama-$(grep -m1 'model name' /proc/cpuinfo | md5sum | cut -c1-8)-$(date +%G-%V)" >> $GITHUB_OUTPUT
+      - uses: actions/cache/restore@v4
+        id: llama-cache
+        with:
+          path: /mnt/nai/llama/build/bin
+          key: ${{ steps.llama.outputs.key }}
       - name: install llama.cpp
-        env:
-          GH_TOKEN: ${{ github.token }}
+        if: steps.llama-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p $WORK/llama && cd $WORK/llama
-          # Prebuilt Linux CPU build if the latest release has one, otherwise compile it (~5 min).
-          gh api repos/ggml-org/llama.cpp/releases/latest --jq '.assets[].name' > assets.txt || true
-          echo "release assets:"; cat assets.txt
-          name=$(grep -iE 'ubuntu' assets.txt | grep -iE 'x64|x86_64' \
-                 | grep -viE 'vulkan|cuda|rocm|hip|sycl|openvino|kompute|arm|aarch64|s390' | head -1 || true)
-          if [ -n "$name" ]; then
-            gh release download --repo ggml-org/llama.cpp --pattern "$name" --output pkg
-            (unzip -q pkg || tar xzf pkg) && rm pkg
-          fi
-          bin=$(find $WORK/llama -name llama-server -type f 2>/dev/null | head -1)
-          if [ -z "$bin" ]; then
-            echo "no prebuilt llama-server - building from source"
-            git clone --depth 1 https://github.com/ggml-org/llama.cpp src
-            cmake -S src -B build -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF > /dev/null
-            cmake --build build --target llama-server -j $(nproc) > build.log 2>&1 || (tail -50 build.log; exit 1)
-            bin=$(find $WORK/llama/build -name llama-server -type f | head -1)
-          fi
-          chmod +x "$bin"
-          dir=$(dirname "$bin")
-          echo "$dir" >> $GITHUB_PATH
-          echo "LD_LIBRARY_PATH=$dir:$LD_LIBRARY_PATH" >> $GITHUB_ENV
-          "$bin" --version || true
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp src
+          cmake -S src -B build -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF \
+                -DBUILD_SHARED_LIBS=OFF > /dev/null
+          cmake --build build --target llama-server -j $(nproc) > build.log 2>&1 || (tail -50 build.log; exit 1)
+      - uses: actions/cache/save@v4
+        if: steps.llama-cache.outputs.cache-hit != 'true'
+        with:
+          path: /mnt/nai/llama/build/bin
+          key: ${{ steps.llama.outputs.key }}
+      - name: put llama.cpp on PATH
+        run: |
+          echo "$WORK/llama/build/bin" >> $GITHUB_PATH
+          echo "LD_LIBRARY_PATH=$WORK/llama/build/bin:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          $WORK/llama/build/bin/llama-server --version || true
+          $WORK/llama/build/bin/llama-server --help | grep -iE "draft|spec|eagle" | head -20 || true
       - name: download model + reference docs
         env:
           MODEL_REPO: ${{ inputs.model_repo }}
           MODEL_FILE: ${{ inputs.model_file }}
+          SPECULATIVE: ${{ inputs.speculative }}
         run: |
           pip install -q huggingface_hub
           path=$(python tools/fetch_model.py --repo "$MODEL_REPO" --file "$MODEL_FILE" --dir "$MODEL_DIR")
           echo "MODEL_PATH=$path" >> $GITHUB_ENV
+          if [ "$SPECULATIVE" = "true" ]; then
+            draft=$(python tools/fetch_model.py --repo "$MODEL_REPO" --draft --dir "$MODEL_DIR" || true)
+            [ -n "$draft" ] && echo "DRAFT_PATH=$draft" >> $GITHUB_ENV
+          fi
           ls -la "$(dirname "$path")"
       - name: start the model
         run: |
           # The weights are memory-mapped, so while Gradle/Minecraft run, Linux can borrow that RAM back.
-          nohup llama-server -m "$MODEL_PATH" --host 127.0.0.1 --port 8080 -c 24576 -np 1 \
-            -t $(nproc) --jinja > $WORK/llama-server.log 2>&1 &
-          for i in $(seq 1 120); do curl -sf http://127.0.0.1:8080/health >/dev/null && echo "model ready" && exit 0; sleep 5; done
-          tail -50 $WORK/llama-server.log; exit 1
+          start() {
+            nohup llama-server -m "$MODEL_PATH" "$@" --host 127.0.0.1 --port 8080 -c 24576 -np 1 \
+              -t $(nproc) --jinja > $WORK/llama-server.log 2>&1 &
+            echo $! > $WORK/llama.pid
+            for i in $(seq 1 60); do
+              curl -sf http://127.0.0.1:8080/health >/dev/null && return 0
+              kill -0 $(cat $WORK/llama.pid) 2>/dev/null || break
+              sleep 5
+            done
+            tail -30 $WORK/llama-server.log; kill $(cat $WORK/llama.pid) 2>/dev/null || true; return 1
+          }
+          if [ -n "$DRAFT_PATH" ] && start -md "$DRAFT_PATH" --draft-max 8 --draft-min 1; then
+            echo "model ready (with draft helper $(basename $DRAFT_PATH))"
+          elif start; then
+            echo "model ready (no draft helper)"
+          else
+            exit 1
+          fi
       - name: build the mod
         env:
           REQUEST: ${{ inputs.request }}
           FIX_ROUNDS: ${{ inputs.fix_rounds }}
         run: |
           python local/nullified_local.py build --provider server --model nullified --context 24576 \
-            --checks local --fallback-model none --fix-rounds "$FIX_ROUNDS" --request "$REQUEST"
+            --checks local --fallback-model none --fix-rounds "$FIX_ROUNDS" --skip-gate --reference-chars 16000 \
+            --request "$REQUEST"
       - name: summary
         if: always()
         run: |
@@ -126,7 +151,9 @@ jobs:
           jars = list(pathlib.Path("output").glob("*/*.jar"))
           if jars: print(f"\nDownload **mod** from the Artifacts section below: `{jars[0].name}`")
           PY
-          tail -5 $WORK/llama-server.log || true
+          python tools/annotate.py build output/result.json  # read by the web page
+          echo "--- model speed (prompt reading / writing) ---"
+          grep -E "prompt eval time|       eval time|draft acceptance|accept" $WORK/llama-server.log | tail -12 || true
       - uses: actions/upload-artifact@v7
         if: always()
         with:

@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nullified AI</title>
+<meta name="description" content="Build Fabric Minecraft mods with Nullified AI running on GitHub's free servers.">
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #16181d; --muted: #5f6673; --line: #e2e5ea;
+    --accent: #6d4aff; --accent-text: #ffffff; --ok: #1f8f4e; --bad: #c8343b; --warn: #a86b00;
+    --code: #f0f2f5; --bubble: #efeaff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --panel: #171a21; --text: #e8eaef; --muted: #9aa1ad; --line: #2a2f3a;
+      --accent: #8b6cff; --accent-text: #ffffff; --ok: #43c47d; --bad: #ef6a70; --warn: #e0a43a;
+      --code: #11141a; --bubble: #241e3d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { padding: 18px 16px 0; max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 2px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  nav { display: flex; gap: 4px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+  nav button { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted);
+               padding: 10px 12px; font: inherit; cursor: pointer; white-space: nowrap; }
+  nav button.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+  main { max-width: 860px; margin: 0 auto; padding: 16px; }
+  section { display: none; } section.on { display: block; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+  label { display: block; font-weight: 600; margin: 10px 0 4px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 2px 0 0; }
+  input, textarea, select { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
+                            background: var(--bg); color: var(--text); font: inherit; }
+  textarea { resize: vertical; min-height: 80px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; } .row > * { flex: 1 1 180px; }
+  button.primary { background: var(--accent); color: var(--accent-text); border: 0; border-radius: 8px;
+                   padding: 10px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+  button.primary:disabled { opacity: .5; cursor: default; }
+  button.ghost { background: none; border: 1px solid var(--line); color: var(--text); border-radius: 8px;
+                 padding: 6px 10px; font: inherit; font-size: 13px; cursor: pointer; }
+  details summary { cursor: pointer; color: var(--muted); margin-top: 10px; }
+  .msg { margin: 14px 0; }
+  .you { background: var(--bubble); border-radius: 12px 12px 4px 12px; padding: 10px 14px; margin-left: auto;
+         max-width: 85%; width: fit-content; white-space: pre-wrap; word-break: break-word; }
+  .ai { background: var(--panel); border: 1px solid var(--line); border-radius: 12px 12px 12px 4px;
+        padding: 12px 14px; margin-top: 8px; max-width: 95%; }
+  .status { display: flex; align-items: center; gap: 8px; font-weight: 600; flex-wrap: wrap; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--warn); flex: none; }
+  .dot.run { animation: pulse 1.4s infinite; }
+  .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin: 10px 0 4px; }
+  .bar > div { height: 100%; background: var(--accent); transition: width .5s; }
+  .meta { color: var(--muted); font-size: 13px; }
+  pre { background: var(--code); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow-x: auto;
+        white-space: pre-wrap; word-break: break-word; font-size: 13px; margin: 8px 0; }
+  a { color: var(--accent); }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; align-items: center; }
+  .dl { display: inline-block; background: var(--ok); color: #fff; text-decoration: none; padding: 8px 14px;
+        border-radius: 8px; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  td, th { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .warnbox { border-left: 3px solid var(--warn); padding: 8px 12px; background: var(--panel); border-radius: 6px; margin-bottom: 14px; }
+  .empty { color: var(--muted); text-align: center; padding: 24px 0; }
+  code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Nullified AI</h1>
+  <p class="sub">Fabric mods for Minecraft 1.21.11, written and tested on GitHub's free servers.</p>
+  <nav>
+    <button data-tab="build" class="on">Build a mod</button>
+    <button data-tab="teach">Training</button>
+    <button data-tab="history">History</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+</header>
+<main>
+  <div id="setupNote" class="warnbox" hidden>Add your GitHub token in <a href="#" data-goto="settings">Settings</a> first.
+    It stays in this browser only.</div>
+
+  <section id="build" class="on">
+    <div class="panel">
+      <label for="request">What mod do you want?</label>
+      <textarea id="request" placeholder="e.g. a copper hammer that mines 3x3 and has 500 durability"></textarea>
+      <details>
+        <summary>Options</summary>
+        <div class="row">
+          <div><label for="fixRounds">Fix rounds</label><input id="fixRounds" type="number" min="0" max="6" value="3"></div>
+          <div><label for="speculative">Speed-up helper</label>
+            <select id="speculative"><option value="true">On</option><option value="false">Off</option></select></div>
+        </div>
+        <label for="modelRepo">Model (Hugging Face repo)</label>
+        <input id="modelRepo" placeholder="default: ggml-org/gpt-oss-20b-GGUF">
+        <p class="hint">Later, put your own trained model here.</p>
+      </details>
+      <div class="actions">
+        <button class="primary" id="buildBtn">Build it</button>
+        <span class="meta">Takes about 30–60 minutes. You can close this page and come back.</span>
+      </div>
+    </div>
+    <div id="chat"></div>
+  </section>
+
+  <section id="teach">
+    <div class="panel">
+      <h3 style="margin:0 0 4px">Step 1: make training data overnight</h3>
+      <p class="meta" style="margin:0">Teacher models write mods, every mod is compiled and booted on a real server,
+        and the results are saved privately to your Hugging Face dataset <code>nullified-ai-data</code>.</p>
+      <label for="runName">Batch name</label>
+      <input id="runName">
+      <p class="hint">Use a new name each night.</p>
+      <label for="teachers">Teachers</label>
+      <input id="teachers" value="openrouter:nvidia/nemotron-3-ultra-550b-a55b:free,openrouter:nvidia/nemotron-3-super-120b-a12b:free,openrouter:qwen/qwen3.8-27b:free">
+      <p class="hint">More are added automatically when these run out (from every provider you've added a key for).</p>
+      <div class="row">
+        <div><label for="minutes">Minutes per part</label><input id="minutes" type="number" value="240">
+          <p class="hint">Two parts run back to back: 240 ≈ 8 hours.</p></div>
+        <div><label for="perCombo">Requests per topic</label><input id="perCombo" type="number" value="4"></div>
+        <div><label for="parallel">Mods at once</label><input id="parallel" type="number" value="3"></div>
+      </div>
+      <div class="actions"><button class="primary" id="teachBtn">Start training data</button></div>
+    </div>
+    <div class="panel">
+      <h3 style="margin:0 0 4px">Step 2: train your model</h3>
+      <p class="meta" style="margin:0">Not set up yet. Once there's enough data, this is where you'll start training your
+        own model, and then use it from the Build tab.</p>
+    </div>
+    <div id="teachRuns"></div>
+  </section>
+
+  <section id="history">
+    <div class="panel">
+      <div class="actions" style="margin:0 0 8px"><strong>Recent runs</strong><button class="ghost" id="refreshHist">Refresh</button></div>
+      <div id="histBody" class="empty">Loading…</div>
+    </div>
+  </section>
+
+  <section id="settings">
+    <div class="panel">
+      <label for="token">GitHub token</label>
+      <input id="token" type="password" autocomplete="off" placeholder="github_pat_…">
+      <p class="hint">A fine-grained token for this repository with <b>Actions: Read and write</b> and <b>Contents: Read</b>
+        (<a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">make one</a>).
+        It is saved only in this browser and only sent to api.github.com.</p>
+      <div class="row">
+        <div><label for="repo">Repository</label><input id="repo"></div>
+        <div><label for="branch">Branch</label><input id="branch" placeholder="main"></div>
+      </div>
+      <div class="actions">
+        <button class="primary" id="saveBtn">Save</button>
+        <button class="ghost" id="testBtn">Test connection</button>
+        <button class="ghost" id="forgetBtn">Forget token</button>
+        <span id="settingsMsg" class="meta"></span>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  // ---------- storage (wrapped: some browsers block it) ----------
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+    del(k) { try { localStorage.removeItem(k); } catch {} },
+    json(k, d) { try { return JSON.parse(store.get(k, "")) ?? d; } catch { return d; } },
+  };
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  function guessRepo() {
+    const h = location.hostname;
+    if (h.endsWith(".github.io")) {
+      const name = location.pathname.split("/").filter(Boolean)[0];
+      if (name) return `${h.split(".")[0]}/${name}`;
+    }
+    return "surgeclient/nullified-ai";
+  }
+  const cfg = () => ({ token: store.get("nai.token", ""), repo: store.get("nai.repo", guessRepo()),
+                       branch: store.get("nai.branch", "") });
+
+  // ---------- GitHub API ----------
+  async function gh(path, { method = "GET", body } = {}) {
+    const { token } = cfg();
+    if (!token) throw new Error("Add your GitHub token in Settings first.");
+    const res = await fetch("https://api.github.com" + path, {
+      method, body: body ? JSON.stringify(body) : undefined,
+      headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github+json",
+                 "X-GitHub-Api-Version": "2022-11-28", ...(body ? { "Content-Type": "application/json" } : {}) },
+    });
+    if (res.status === 204) return null;
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      const hint = { 401: "The token is wrong or expired.",
+                     403: "The token needs Actions: Read and write + Contents: Read on this repository.",
+                     404: "Repository or workflow not found (check Settings, and that the branch is merged into main).",
+                     422: "GitHub rejected the request (is the workflow on the default branch?)." }[res.status] || "";
+      throw new Error(`GitHub ${res.status}: ${hint} ${data && data.message ? "(" + data.message + ")" : ""}`);
+    }
+    return data;
+  }
+  let defaultBranch = null;
+  async function branch() {
+    const c = cfg();
+    if (c.branch) return c.branch;
+    if (!defaultBranch) defaultBranch = (await gh(`/repos/${c.repo}`)).default_branch;
+    return defaultBranch;
+  }
+  async function dispatch(workflow, inputs) {
+    await gh(`/repos/${cfg().repo}/actions/workflows/${workflow}/dispatches`,
+             { method: "POST", body: { ref: await branch(), inputs } });
+  }
+  async function findRun(workflow, match) {
+    const runs = (await gh(`/repos/${cfg().repo}/actions/workflows/${workflow}/runs?event=workflow_dispatch&per_page=30`)).workflow_runs;
+    return runs.find((r) => match(r.display_title || "")) || null;
+  }
+  async function resultNotice(jobId, title) {
+    const anns = await gh(`/repos/${cfg().repo}/check-runs/${jobId}/annotations?per_page=50`);
+    const a = (anns || []).find((x) => x.title === title);
+    if (!a) return null;
+    try { return JSON.parse(a.message); } catch { return null; }
+  }
+
+  // ---------- tabs ----------
+  function show(tab) {
+    document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
+    document.querySelectorAll("main section").forEach((s) => s.classList.toggle("on", s.id === tab));
+    if (tab === "history") loadHistory();
+  }
+  document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => show(b.dataset.tab)));
+  document.querySelectorAll("[data-goto]").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); show(a.dataset.goto); }));
+  const refreshSetupNote = () => { $("setupNote").hidden = !!cfg().token; };
+
+  // ---------- step names -> plain words ----------
+  const STEP_WORDS = [
+    [/free disk/i, "Getting a server ready"], [/checkout|setup-java|setup-gradle|setup-python|actions\/cache|cache key/i, "Getting a server ready"],
+    [/llama/i, "Setting up the AI engine"], [/download model/i, "Downloading the model"],
+    [/start the model/i, "Loading the model"], [/build the mod/i, "Writing, compiling and testing the mod"],
+    [/^teach$/i, "Teachers writing and testing mods"], [/summary|upload|post |complete job/i, "Wrapping up"],
+  ];
+  const words = (name) => (STEP_WORDS.find(([re]) => re.test(name)) || [null, name])[1];
+  const mins = (ms) => Math.max(0, Math.round(ms / 60000));
+
+  function progressOf(job) {
+    const steps = (job.steps || []).filter((s) => !/^Post |^Complete job|^Set up job/.test(s.name));
+    const done = steps.filter((s) => s.status === "completed").length;
+    const current = steps.find((s) => s.status === "in_progress");
+    return { pct: steps.length ? Math.round((done / steps.length) * 100) : 0,
+             label: current ? words(current.name) : (job.status === "queued" ? "Waiting for a free GitHub server" : "Starting") };
+  }
+
+  // ---------- Build ----------
+  const builds = () => store.json("nai.builds", []);
+  const saveBuilds = (b) => store.set("nai.builds", JSON.stringify(b.slice(0, 30)));
+
+  $("buildBtn").addEventListener("click", async () => {
+    const request = $("request").value.trim();
+    if (request.length < 5) { $("request").focus(); return; }
+    $("buildBtn").disabled = true;
+    const jobId = Math.random().toString(36).slice(2, 10);
+    const inputs = { request, fix_rounds: String($("fixRounds").value || 3), speculative: $("speculative").value, job_id: jobId };
+    if ($("modelRepo").value.trim()) inputs.model_repo = $("modelRepo").value.trim();
+    try {
+      await dispatch("nullified.yml", inputs);
+      const list = builds(); list.unshift({ jobId, request, created: Date.now() }); saveBuilds(list);
+      $("request").value = "";
+      renderChat(); pollBuilds();
+    } catch (e) { alert(e.message); }
+    $("buildBtn").disabled = false;
+  });
+
+  function renderChat() {
+    const list = builds();
+    $("chat").innerHTML = list.length ? "" : '<p class="empty">Your mods will show up here.</p>';
+    for (const b of list) {
+      const el = document.createElement("div");
+      el.className = "msg"; el.id = "b-" + b.jobId;
+      el.innerHTML = `<div class="you">${esc(b.request)}</div><div class="ai">${b.view || '<div class="status"><span class="dot run"></span>Sending to GitHub…</div>'}</div>`;
+      $("chat").appendChild(el);
+    }
+  }
+
+  function buildView(b, run, job, result, artifact) {
+    const repo = cfg().repo;
+    const elapsed = mins((run && run.updated_at ? (run.status === "completed" ? new Date(run.updated_at) : Date.now()) : Date.now()) - b.created);
+    if (!run) return `<div class="status"><span class="dot run"></span>Waiting for GitHub to start it…</div>`;
+    const link = `<a href="${esc(run.html_url)}" target="_blank" rel="noopener">log</a>`;
+    if (run.status !== "completed") {
+      const p = job ? progressOf(job) : { pct: 0, label: "Waiting for a free GitHub server" };
+      return `<div class="status"><span class="dot run"></span>${esc(p.label)}</div>
+        <div class="bar"><div style="width:${p.pct}%"></div></div>
+        <div class="actions"><span class="meta">${elapsed} min so far · ${link}</span>
+        <button class="ghost" data-cancel="${run.id}">Cancel</button></div>`;
+    }
+    if (run.conclusion === "cancelled") return `<div class="status"><span class="dot bad"></span>Cancelled</div><div class="meta">${link}</div>`;
+    if (!result) return `<div class="status"><span class="dot bad"></span>Something went wrong (${esc(run.conclusion)})</div>
+      <div class="meta">The build stopped before it finished. Open the ${link} to see why.</div>`;
+    if (result.refused) return `<div class="status"><span class="dot bad"></span>Refused</div><p>${esc(result.refused)}</p><div class="meta">${link}</div>`;
+    const plan = result.plan ? `<pre>${esc(result.plan)}</pre>` : "";
+    const rounds = (result.stages || []).join(" → ");
+    if (result.ok) {
+      const dl = artifact ? `<a class="dl" href="https://github.com/${esc(repo)}/actions/runs/${run.id}/artifacts/${artifact.id}">Download mod (.jar + project)</a>` : "";
+      return `<div class="status"><span class="dot ok"></span>Built and tested ✓</div>${plan}
+        <div class="actions">${dl}<span class="meta">${elapsed} min · checks: ${esc(rounds)} · ${link}</span></div>
+        <p class="hint">Put the .jar in your <code>.minecraft/mods</code> folder (needs Fabric Loader + Fabric API for 1.21.11).</p>`;
+    }
+    const errs = (result.errors || []).length ? `<pre>${esc(result.errors.join("\n\n"))}</pre>` : "";
+    return `<div class="status"><span class="dot bad"></span>Couldn't make it pass every check</div>${plan}
+      <div class="meta">Checks per round: ${esc(rounds)}</div>${errs}
+      <div class="actions"><span class="meta">${elapsed} min · ${link}</span><button class="ghost" data-retry="${esc(b.jobId)}">Try again</button></div>`;
+  }
+
+  let polling = false;
+  async function pollBuilds() {
+    if (polling || !cfg().token) return;
+    polling = true;
+    try {
+      const list = builds();
+      for (const b of list.filter((x) => !x.final)) {
+        try {
+          if (!b.runId) {
+            const run = await findRun("nullified.yml", (t) => t.startsWith(`[${b.jobId}]`));
+            if (run) b.runId = run.id;
+          }
+          let run = null, job = null, result = null, artifact = null;
+          if (b.runId) {
+            run = await gh(`/repos/${cfg().repo}/actions/runs/${b.runId}`);
+            job = ((await gh(`/repos/${cfg().repo}/actions/runs/${b.runId}/jobs`)).jobs || [])[0] || null;
+            if (run.status === "completed") {
+              if (job) result = await resultNotice(job.id, "nullified-result");
+              if (result && result.ok) artifact = ((await gh(`/repos/${cfg().repo}/actions/runs/${b.runId}/artifacts`)).artifacts || []).find((a) => a.name === "mod");
+              b.final = true;
+            }
+          } else if (Date.now() - b.created > 10 * 60000) {
+            b.view = `<div class="status"><span class="dot bad"></span>GitHub never started this build.</div>`; b.final = true;
+            continue;
+          }
+          b.view = buildView(b, run, job, result, artifact);
+        } catch (e) { b.view = `<div class="status"><span class="dot bad"></span>${esc(e.message)}</div>`; }
+      }
+      saveBuilds(list); renderChat();
+    } finally { polling = false; }
+  }
+
+  document.addEventListener("click", async (e) => {
+    const c = e.target.closest("[data-cancel]"), r = e.target.closest("[data-retry]");
+    if (c && confirm("Cancel this run?")) {
+      try { await gh(`/repos/${cfg().repo}/actions/runs/${c.dataset.cancel}/cancel`, { method: "POST" }); } catch (err) { alert(err.message); }
+      setTimeout(() => { pollBuilds(); pollTeach(); }, 3000);
+    }
+    if (r) {
+      const b = builds().find((x) => x.jobId === r.dataset.retry);
+      if (b) { $("request").value = b.request; show("build"); $("request").focus(); }
+    }
+  });
+
+  // ---------- Training ----------
+  const today = new Date().toISOString().slice(0, 10);
+  $("runName").value = "night-" + today;
+  const teaches = () => store.json("nai.teach", []);
+  const saveTeaches = (t) => store.set("nai.teach", JSON.stringify(t.slice(0, 20)));
+
+  $("teachBtn").addEventListener("click", async () => {
+    const run = $("runName").value.trim().replace(/[^\w.-]/g, "-");
+    if (!run) return;
+    if (teaches().some((t) => t.run === run) && !confirm(`"${run}" was used before - its data would be overwritten. Continue?`)) return;
+    $("teachBtn").disabled = true;
+    try {
+      await dispatch("teach.yml", { run, teachers: $("teachers").value.trim(), minutes: String($("minutes").value),
+                                    per_combo: String($("perCombo").value), parallel: String($("parallel").value) });
+      const list = teaches(); list.unshift({ run, created: Date.now() }); saveTeaches(list);
+      renderTeach(); pollTeach();
+    } catch (e) { alert(e.message); }
+    $("teachBtn").disabled = false;
+  });
+
+  function renderTeach() {
+    $("teachRuns").innerHTML = teaches().map((t) => `<div class="panel" id="t-${esc(t.run)}"><strong>${esc(t.run)}</strong>
+      <div>${t.view || '<div class="status"><span class="dot run"></span>Sending to GitHub…</div>'}</div></div>`).join("");
+  }
+
+  async function pollTeach() {
+    if (!cfg().token) return;
+    const list = teaches();
+    for (const t of list.filter((x) => !x.final)) {
+      try {
+        if (!t.runId) { const run = await findRun("teach.yml", (title) => title === `teach ${t.run}`); if (run) t.runId = run.id; }
+        if (!t.runId) { t.view = `<div class="status"><span class="dot run"></span>Waiting for GitHub to start it…</div>`; continue; }
+        const run = await gh(`/repos/${cfg().repo}/actions/runs/${t.runId}`);
+        const jobs = (await gh(`/repos/${cfg().repo}/actions/runs/${t.runId}/jobs`)).jobs || [];
+        const parts = [];
+        let records = 0, passing = 0;
+        for (const job of jobs) {
+          let line = `<span class="dot ${job.status !== "completed" ? "run" : job.conclusion === "success" ? "ok" : "bad"}"></span>${esc(job.name)}: `;
+          if (job.status !== "completed") line += esc(progressOf(job).label);
+          else {
+            const s = await resultNotice(job.id, "nullified-teach");
+            if (s && !s.crashed) { records += s.records || 0; passing += s.passing_mods || 0;
+              line += `${s.passing_mods} working mods, ${s.fix_attempts} fixes (${s.minutes} min)`; }
+            else line += esc(job.conclusion || "finished");
+          }
+          parts.push(`<div class="status" style="font-weight:400">${line}</div>`);
+        }
+        const done = run.status === "completed";
+        t.view = `${parts.join("") || '<div class="status"><span class="dot run"></span>Starting…</div>'}
+          <div class="actions"><span class="meta">${done ? `Done: ${passing} working mods saved to Hugging Face` : `${mins(Date.now() - t.created)} min so far`} ·
+          <a href="${esc(run.html_url)}" target="_blank" rel="noopener">log</a></span>
+          ${done ? "" : `<button class="ghost" data-cancel="${run.id}">Stop</button>`}</div>`;
+        if (done) t.final = true;
+      } catch (e) { t.view = `<div class="status"><span class="dot bad"></span>${esc(e.message)}</div>`; }
+    }
+    saveTeaches(list); renderTeach();
+  }
+
+  // ---------- History ----------
+  async function loadHistory() {
+    if (!cfg().token) { $("histBody").innerHTML = '<p class="empty">Add your token in Settings.</p>'; return; }
+    $("histBody").innerHTML = '<p class="empty">Loading…</p>';
+    try {
+      const runs = (await gh(`/repos/${cfg().repo}/actions/runs?event=workflow_dispatch&per_page=25`)).workflow_runs
+        .filter((r) => /nullified|teach/i.test(r.name || "") || /nullified\.yml|teach\.yml/.test(r.path || ""));
+      if (!runs.length) { $("histBody").innerHTML = '<p class="empty">No runs yet.</p>'; return; }
+      $("histBody").innerHTML = `<table><tr><th></th><th>What</th><th>When</th></tr>${runs.map((r) => {
+        const state = r.status !== "completed" ? "run" : r.conclusion === "success" ? "ok" : "bad";
+        return `<tr><td><span class="dot ${state}" style="display:inline-block"></span></td>
+          <td><a href="${esc(r.html_url)}" target="_blank" rel="noopener">${esc((r.display_title || "").replace(/^\[[^\]]*\]\s*/, ""))}</a>
+          <div class="meta">${/teach/.test(r.path) ? "training data" : "mod build"} · ${esc(r.status === "completed" ? r.conclusion : r.status)}</div></td>
+          <td class="meta">${new Date(r.created_at).toLocaleString()}</td></tr>`; }).join("")}</table>`;
+    } catch (e) { $("histBody").innerHTML = `<p class="empty">${esc(e.message)}</p>`; }
+  }
+  $("refreshHist").addEventListener("click", loadHistory);
+
+  // ---------- Settings ----------
+  const fill = () => { const c = cfg(); $("token").value = c.token; $("repo").value = c.repo; $("branch").value = c.branch; };
+  $("saveBtn").addEventListener("click", () => {
+    store.set("nai.token", $("token").value.trim()); store.set("nai.repo", $("repo").value.trim() || guessRepo());
+    store.set("nai.branch", $("branch").value.trim()); defaultBranch = null;
+    $("settingsMsg").textContent = "Saved."; refreshSetupNote(); pollBuilds(); pollTeach();
+  });
+  $("testBtn").addEventListener("click", async () => {
+    $("settingsMsg").textContent = "Checking…";
+    try {
+      const r = await gh(`/repos/${cfg().repo}`);
+      const wf = (await gh(`/repos/${cfg().repo}/actions/workflows`)).workflows.map((w) => w.path);
+      const missing = [".github/workflows/nullified.yml", ".github/workflows/teach.yml"].filter((p) => !wf.includes(p));
+      $("settingsMsg").textContent = `Connected to ${r.full_name} (${r.private ? "private" : "public"}).` +
+        (missing.length ? ` Missing on the default branch: ${missing.join(", ")} - merge the branch first.` : " Everything is ready.");
+    } catch (e) { $("settingsMsg").textContent = e.message; }
+  });
+  $("forgetBtn").addEventListener("click", () => { store.del("nai.token"); fill(); refreshSetupNote(); $("settingsMsg").textContent = "Token removed from this browser."; });
+
+  // ---------- start ----------
+  fill(); refreshSetupNote(); renderChat(); renderTeach();
+  if (!cfg().token) show("settings");
+  pollBuilds(); pollTeach();
+  setInterval(() => { if (!document.hidden) { pollBuilds(); pollTeach(); } }, 20000);
+})();
+</script>
+</body>
+</html>

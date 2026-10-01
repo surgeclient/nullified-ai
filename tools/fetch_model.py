@@ -19,6 +19,7 @@ def main():
     p.add_argument("--repo", required=True)
     p.add_argument("--file", default="")
     p.add_argument("--dir", required=True)
+    p.add_argument("--draft", action="store_true", help="fetch the repo's small draft (speculative) helper instead")
     args = p.parse_args()
     token = os.environ.get("HF_TOKEN") or None
 
@@ -34,13 +35,20 @@ def main():
     print(f"{args.repo}: {sorted(infos)}", file=sys.stderr)
     if not infos:
         sys.exit(f"no .gguf files in {args.repo}")
+    if args.draft:
+        drafts = [f for f in infos if re.search(r"eagle|draft", f, re.I)]
+        if not drafts:
+            sys.exit(f"no draft helper in {args.repo}")
+        args.file = next((f for f in drafts if re.search(r"q8", f, re.I)), min(drafts, key=lambda f: infos[f]))
+    elif re.search(r"eagle|draft", args.file, re.I):
+        args.file = ""
     if args.file in infos:
         pick = args.file
     else:
         if args.file:
             print(f"{args.file} not found, choosing automatically", file=sys.stderr)
         # one entry per model: the first shard of split files, whole files otherwise; skip vision projectors
-        firsts = [f for f in infos if not re.search(r"-0000[2-9]-of-|mmproj", f, re.I)]
+        firsts = [f for f in infos if not re.search(r"-0000[2-9]-of-|mmproj|eagle|draft", f, re.I)]
         pick = None
         for pattern in PREFER:
             matches = [f for f in firsts if re.search(pattern, f, re.I)]
