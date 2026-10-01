@@ -22,8 +22,15 @@ def main():
     args = p.parse_args()
     token = os.environ.get("HF_TOKEN") or None
 
-    infos = {f.rfilename: f.size or 0 for f in
-             HfApi().model_info(args.repo, files_metadata=True, token=token).siblings if f.rfilename.endswith(".gguf")}
+    try:
+        info = HfApi().model_info(args.repo, files_metadata=True, token=token)
+    except Exception as e:  # an invalid HF_TOKEN would also block public models
+        if token is None:
+            raise
+        print(f"HF_TOKEN rejected ({str(e).splitlines()[-1][:150]}); trying without it", file=sys.stderr)
+        token = None
+        info = HfApi().model_info(args.repo, files_metadata=True, token=False)
+    infos = {f.rfilename: f.size or 0 for f in info.siblings if f.rfilename.endswith(".gguf")}
     print(f"{args.repo}: {sorted(infos)}", file=sys.stderr)
     if not infos:
         sys.exit(f"no .gguf files in {args.repo}")
@@ -43,7 +50,7 @@ def main():
     shard = re.search(r"-00001-of-(\d+)", pick)
     parts = [pick.replace("-00001-of-", f"-{i:05d}-of-") for i in range(1, int(shard.group(1)) + 1)] if shard else [pick]
     print(f"downloading {parts} ({sum(infos.get(x, 0) for x in parts) / 1e9:.1f} GB)", file=sys.stderr)
-    paths = [hf_hub_download(args.repo, part, local_dir=args.dir, token=token) for part in parts]
+    paths = [hf_hub_download(args.repo, part, local_dir=args.dir, token=token if token else False) for part in parts]
     print(paths[0])
 
 

@@ -203,9 +203,15 @@ def load_reference(folder: str):
         except ImportError:
             sys.exit("HF_TOKEN is set, so reference docs will be downloaded: pip install huggingface_hub")
         token = os.environ["HF_TOKEN"]
-        user = HfApi(token=token).whoami()["name"]
-        path = Path(snapshot_download(f"{user}/nullified-ai-reference", repo_type="dataset", token=token,
-                                      allow_patterns=[f"{VERSION}/*"], local_dir=str(ROOT / ".work" / "reference"))) / VERSION
+        try:
+            user = HfApi(token=token).whoami()["name"]
+            path = Path(snapshot_download(f"{user}/nullified-ai-reference", repo_type="dataset", token=token,
+                                          allow_patterns=[f"{VERSION}/*"],
+                                          local_dir=str(ROOT / ".work" / "reference"))) / VERSION
+        except Exception as e:  # a bad token or a missing dataset shouldn't stop the build
+            print(f"WARNING: could not download the reference docs with HF_TOKEN ({str(e).splitlines()[-1][:200]}). "
+                  "Check that the token is valid and has read access.")
+            path = None
     if path is None or not (path / f"minecraft-{VERSION}.jsonl").exists():
         print("Note: no reference docs (set HF_TOKEN or pass --reference-dir). The model will work from memory, "
               "which fails more often.")
