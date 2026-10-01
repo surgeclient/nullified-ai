@@ -69,6 +69,21 @@ class SymbolIndex:
         pat = re.compile(rf"static final [\w.$<>?, ]+ {re.escape(name)};")
         return sorted((f"{fqn}.{name}" for fqn, text in self.signatures.items() if pat.search(text)), key=len)
 
+    def similar_constants(self, fqn: str, name: str, k: int = 8) -> list[str]:
+        """Static fields of fqn closest to name, e.g. CreativeModeTabs.TOOLS -> TOOLS_AND_UTILITIES."""
+        fields = re.findall(r"static final [\w.$<>?, ]+ ([A-Z][A-Z0-9_]*);", self.signatures.get(fqn, ""))
+        tokens = set(name.lower().split("_"))
+        def score(f):
+            return difflib.SequenceMatcher(None, name.lower(), f.lower()).ratio() + 0.5 * len(tokens & set(f.lower().split("_")))
+        return sorted(dict.fromkeys(fields), key=score, reverse=True)[:k]
+
+    def public_methods(self, fqn: str, k: int = 25) -> list[str]:
+        out = []
+        for cls in self.hierarchy(fqn)[:3]:
+            out += [f"{l.strip()}   [in {cls.rsplit('.', 1)[-1]}]" for l in self.signatures[cls].splitlines()[1:]
+                    if l.strip().startswith("public") and METHOD.search(l)]
+        return out[:k]
+
     def hierarchy(self, fqn: str, depth: int = 8) -> list[str]:
         seen, queue = [], [fqn]
         while queue and len(seen) < depth * 3:
@@ -116,7 +131,14 @@ class SymbolIndex:
             for kind, name in SYMBOL.findall(e):
                 if kind == "variable" and name.isupper() and len(name) > 2:
                     owners = self.find_constant(name)
-                    facts.append(f"- constant {name}: " + (", ".join(owners[:4]) if owners else "does NOT exist in this version"))
+                    fact = f"- constant {name}: " + (", ".join(owners[:4]) if owners else "does NOT exist in this version")
+                    used_on = re.search(rf"\b([A-Z]\w+)\.{re.escape(name)}\b", e)  # e.g. CreativeModeTabs.TOOLS
+                    owner = self.resolve(used_on.group(1), text) if used_on else None
+                    if owner:
+                        close = self.similar_constants(owner, name)
+                        if close:
+                            fact += f". Real constants in {owner.rsplit('.', 1)[-1]} with similar names: " + ", ".join(close)
+                    facts.append(fact)
                 elif kind == "class" or (kind == "variable" and name[:1].isupper()):
                     found = self.find_class(name)
                     facts.append(f"- class {name}: " + (", ".join(found[:3]) if found else "does NOT exist in this version"))
@@ -138,6 +160,13 @@ class SymbolIndex:
                 if m and owner:
                     facts.append(f"- {m.group(1)}(...) is not a method of {owner.rsplit('.', 1)[-1]} or its parents. "
                                  f"Closest real methods you can override:\n    " + "\n    ".join(self.suggest_methods(owner, m.group(1))))
+
+            prot = re.search(r"(\w+)\(.*?\) has (?:protected|private) access in ([\w.$]+)", msg)
+            if prot:
+                owner = self.resolve(prot.group(2), text) or (prot.group(2) if prot.group(2) in self.signatures else None)
+                if owner:
+                    facts.append(f"- {prot.group(1)}() can't be called from your code. Public methods of "
+                                 f"{owner.rsplit('.', 1)[-1]} you can use instead:\n    " + "\n    ".join(self.public_methods(owner)))
 
             pm = MISSING_PACKAGE.search(msg)
             if pm:

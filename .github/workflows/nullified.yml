@@ -118,7 +118,7 @@ jobs:
             done
             tail -30 $WORK/llama-server.log; kill $(cat $WORK/llama.pid) 2>/dev/null || true; return 1
           }
-          if [ -n "$DRAFT_PATH" ] && start -md "$DRAFT_PATH" --draft-max 8 --draft-min 1; then
+          if [ -n "$DRAFT_PATH" ] && start -md "$DRAFT_PATH" --spec-draft-n-max 8; then
             echo "model ready (with draft helper $(basename $DRAFT_PATH))"
           elif start; then
             echo "model ready (no draft helper)"

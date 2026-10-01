@@ -76,10 +76,20 @@ def run_server(work: Path, probe_jar: Path, gradlew: str = "./gradlew", timeout:
     return False, extract_runtime_errors(output) or [output[-3000:]], {}
 
 
+# Server data that belongs in data/<ns>/, not assets/<ns>/ (the game silently ignores it under assets/).
+DATA_KINDS = ("recipe", "recipes", "tags", "loot_table", "loot_tables", "advancement", "advancements", "function",
+              "functions", "predicate", "predicates", "item_modifier", "item_modifiers", "structure", "structures",
+              "worldgen", "enchantment", "damage_type", "dimension", "dimension_type", "trim_material", "trim_pattern")
+
+
 def fix_data_dirs(files: dict[str, str]) -> dict[str, str]:
-    """Move files out of data folders 1.21 renamed (recipes/ -> recipe/ ...). Purely mechanical, so no model needed."""
+    """Move server data out of assets/ into data/, and out of folders 1.21 renamed (recipes/ -> recipe/ ...).
+    Purely mechanical, so no model needed."""
     out = {}
     for path, body in files.items():
+        a = re.match(r"src/main/resources/assets/([^/]+)/([^/]+)/(.+)$", path)
+        if a and a.group(2) in DATA_KINDS:
+            path = f"src/main/resources/data/{a.group(1)}/{a.group(2)}/{a.group(3)}"
         m = re.match(r"(src/main/resources/data/[^/]+/)(.+)$", path)
         if m:
             for old, new in OLD_DATA_DIRS.items():
@@ -181,9 +191,17 @@ def validate_assets(files: dict[str, str], probe: dict) -> list[str]:
                 break
         if m.group(2).startswith(("recipe/", "loot_table/", "advancement/")) and path.endswith(".json"):
             try:
-                json.loads(files[path])
+                data = json.loads(files[path])
             except json.JSONDecodeError as e:
                 problems.append(f"{path} is not valid JSON: {e}")
+                continue
+            if m.group(2).startswith("recipe/") and isinstance(data, dict):
+                ingredients = list((data.get("key") or {}).values()) + list(data.get("ingredients") or [])
+                result = data.get("result")
+                if any(isinstance(i, dict) for i in ingredients) or (isinstance(result, dict) and "item" in result):
+                    problems.append(f"{path} uses the old recipe format. In 1.21.11 ingredients are plain strings "
+                                    '(\"minecraft:stick\" or \"#minecraft:planks\") and the result is '
+                                    '{\"id\": \"<modid>:<item>\", \"count\": 1}')
 
     mod_json = load("src/main/resources/fabric.mod.json")
     if isinstance(mod_json, dict) and isinstance(mod_json.get("icon"), str) and f"src/main/resources/{mod_json['icon']}" not in files:
