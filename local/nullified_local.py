@@ -19,7 +19,6 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 import urllib.error
@@ -216,17 +215,6 @@ def load_reference(folder: str):
 
 # ---------------------------------------------------------------- checks: GitHub Actions (default) or this PC
 
-def github_repo() -> str:
-    if os.environ.get("NULLIFIED_REPO"):
-        return os.environ["NULLIFIED_REPO"]
-    try:
-        url = subprocess.run(["git", "remote", "get-url", "origin"], cwd=ROOT, capture_output=True, text=True).stdout
-    except OSError:
-        url = ""
-    m = re.search(r"github\.com[:/]([^/]+/[^/.\s]+)", url)
-    return m.group(1) if m else "surgeclient/nullified-ai"
-
-
 class Checker:
     def __init__(self, where: str, ref: str):
         self.local = where == "local"
@@ -234,7 +222,7 @@ class Checker:
             import mod_checks  # needs Java 21 + ~3 GB for Gradle and Minecraft
             self.mod_checks = mod_checks
         else:
-            from github_checks import GitHubChecks
+            from github_checks import GitHubChecks, github_repo
             token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
             if not token:
                 sys.exit("Set GITHUB_TOKEN to a GitHub token with 'Actions: Read and write' + 'Contents: Read' "

@@ -1,10 +1,38 @@
 # Nullified AI without Modal
 
-**Recommended: everything on GitHub.** The model runs on GitHub's free servers and your PC only starts the job:
-see [`runner/README.md`](../runner/README.md), then run
-`python local/nullified_remote.py --request "..."`.
+## Recommended: everything on GitHub
 
-The rest of this page covers the other option: a free online API for the model, with checks on GitHub.
+The model (gpt-oss-20b, later your own trained one) runs on GitHub's free servers, together with the compiling,
+the Minecraft test server and the packaging (`.github/workflows/nullified.yml`). Your PC only starts the job and
+downloads the `.jar`. This needs the repo to be **public**: public repos get 16 GB RAM servers and unlimited free
+minutes.
+
+### Set it up (once)
+1. **Make the repo public:** in nullified-ai go to **Settings → General**, scroll to the bottom (Danger Zone), click
+   **Change visibility → Make public**, and confirm. The code history was checked, and no keys are in it.
+2. **Add your Hugging Face token as a secret:** go to **Settings → Secrets and variables → Actions → New repository
+   secret**, name it `HF_TOKEN`, and paste a Hugging Face token with **Read** access as the value. Secrets are never
+   shown in the code or logs, not even in a public repo, and people without write access can't run your workflows.
+3. **On your PC:** your `GITHUB_TOKEN` needs **Actions: Read and write** and **Contents: Read** on nullified-ai.
+   Never put a key in a file in this repo; keys belong only in `setx` and GitHub Secrets.
+
+### Build a mod
+- **From the website:** go to **Actions → nullified → Run workflow**, type the mod you want and click **Run
+  workflow**. When the run finishes (about 45–90 min), download **mod** under **Artifacts** at the bottom of the run page.
+- **From your PC:**
+  ```
+  python local/nullified_remote.py --request "a ruby sword that sets mobs on fire"
+  ```
+  This downloads the result into `output/`.
+
+### Good to know
+- **Anyone can see what you build.** Because the repo is public, anyone can see the code, `restrictions.txt`, the
+  requests, the logs and the built mods. Your secrets and your private Hugging Face model and datasets stay hidden.
+- **It's slow.** The model runs on a CPU, so one attempt takes about 15–25 minutes. Several builds can run at the same time.
+- **To use your own trained model later:** pass `--model-repo <you>/<repo> --model-file <file>.gguf`.
+
+## Other option: online API for the model
+
 
 
 - **The model** is a big (30B+) model on a free online API: OpenRouter (default), Groq or Cerebras. It uses no

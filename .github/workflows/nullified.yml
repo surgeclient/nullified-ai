@@ -1,11 +1,11 @@
-# Nullified AI runner: builds a Minecraft mod on GitHub's free servers.
+# Nullified AI: builds a Minecraft mod on GitHub's free servers. Nothing runs on your PC.
 # The model (gpt-oss-20b, or your own trained version) runs on this server's CPU, then the mod is compiled,
-# booted on a real 1.21.11 server, fixed if needed, and packaged. Nothing runs on your PC.
+# booted on a real 1.21.11 server, fixed if needed, and packaged.
 #
-# Start it from the Actions tab (Run workflow) or with local/nullified_remote.py in nullified-ai.
-# This repo is public (so the free servers have 16 GB RAM); the pipeline code is checked out from the
-# private nullified-ai repo with the NULLIFIED_TOKEN secret, and the model/docs come from Hugging Face.
-name: build
+# Start it from the Actions tab (Run workflow) or with local/nullified_remote.py.
+# Needs the repo to be public (public repos get 16 GB RAM servers and unlimited minutes).
+# Secrets (Settings -> Secrets and variables -> Actions) are never shown in code or logs: HF_TOKEN.
+name: nullified
 run-name: "${{ inputs.request }} [${{ inputs.job_id }}]"
 on:
   workflow_dispatch:
@@ -22,9 +22,6 @@ on:
       model_file:
         description: ".gguf file in that repo"
         default: "gpt-oss-20b-mxfp4.gguf"
-      ref:
-        description: "nullified-ai branch to use"
-        default: "main"
       job_id:
         description: "Leave as is (used by nullified_remote.py)"
         default: "manual"
@@ -36,6 +33,8 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 355
+    permissions:
+      contents: read
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       MODEL_DIR: /mnt/model
@@ -46,10 +45,6 @@ jobs:
           sudo mkdir -p $MODEL_DIR && sudo chown $USER $MODEL_DIR
           df -h / /mnt; free -g
       - uses: actions/checkout@v6
-        with:
-          repository: surgeclient/nullified-ai
-          ref: ${{ inputs.ref }}
-          token: ${{ secrets.NULLIFIED_TOKEN }}
       - uses: actions/setup-java@v5
         with:
           java-version: '25'

@@ -12,6 +12,9 @@ import base64
 import gzip
 import io
 import json
+import os
+import re
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -20,6 +23,19 @@ import zipfile
 from pathlib import Path
 
 MAX_PAYLOAD = 60000  # workflow_dispatch inputs are capped at 65,535 characters in total
+
+
+def github_repo() -> str:
+    """owner/repo of this checkout (NULLIFIED_REPO overrides)."""
+    if os.environ.get("NULLIFIED_REPO"):
+        return os.environ["NULLIFIED_REPO"]
+    try:
+        url = subprocess.run(["git", "remote", "get-url", "origin"], cwd=Path(__file__).resolve().parent.parent,
+                             capture_output=True, text=True).stdout
+    except OSError:
+        url = ""
+    m = re.search(r"github\.com[:/]([^/]+/[^/.\s]+)", url)
+    return m.group(1) if m else "surgeclient/nullified-ai"
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
