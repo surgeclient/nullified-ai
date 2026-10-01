@@ -6,7 +6,7 @@
 # Needs the repo to be public (public repos get 16 GB RAM servers and unlimited minutes).
 # Secrets (Settings -> Secrets and variables -> Actions) are never shown in code or logs: HF_TOKEN.
 name: nullified
-run-name: "${{ inputs.request }} [${{ inputs.job_id }}]"
+run-name: "[${{ inputs.job_id }}] ${{ inputs.request }}"
 on:
   workflow_dispatch:
     inputs:
@@ -151,6 +151,7 @@ jobs:
           jars = list(pathlib.Path("output").glob("*/*.jar"))
           if jars: print(f"\nDownload **mod** from the Artifacts section below: `{jars[0].name}`")
           PY
+          python tools/annotate.py build output/result.json  # read by the web page
           echo "--- model speed (prompt reading / writing) ---"
           grep -E "prompt eval time|       eval time|draft acceptance|accept" $WORK/llama-server.log | tail -12 || true
       - uses: actions/upload-artifact@v7

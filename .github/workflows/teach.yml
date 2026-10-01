@@ -77,4 +77,5 @@ jobs:
         if: always()
         run: |
           f=$(ls output/data/*.summary.json 2>/dev/null | head -1)
+          python tools/annotate.py teach "${f:-output/data/none.json}"  # read by the web page
           if [ -n "$f" ]; then echo '```' >> $GITHUB_STEP_SUMMARY; cat "$f" >> $GITHUB_STEP_SUMMARY; echo '```' >> $GITHUB_STEP_SUMMARY; fi

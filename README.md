@@ -3,6 +3,10 @@
 A team of specialist AI models (one base model + LoRA adapters) trained to write
 Fabric Minecraft mods for 1.21.11 and newer.
 
+## Web page
+Build mods and start training data from https://surgeclient.github.io/nullified-ai/ (`docs/index.html`, served by
+GitHub Pages: Settings → Pages → Deploy from a branch → `main` / `/docs`). Your GitHub token stays in your browser.
+
 ## Run it free (no Modal)
 Everything on GitHub (model included): see [`local/README.md`](local/README.md), then
 `python local/nullified_remote.py --request "..."`. Or use a free online API: See [`local/README.md`](local/README.md). The model runs on a free online API (30B+ models, no disk space) with
