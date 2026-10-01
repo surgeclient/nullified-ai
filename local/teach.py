@@ -58,7 +58,7 @@ class Teachers:
     def __init__(self, specs: list[str], context: int, auto: bool = True):
         self.context, self.auto = context, auto
         self.models, self.lock, self.i = [], threading.Lock(), 0
-        self.tried, self.exhausted = set(), set()
+        self.tried, self.exhausted, self.fails = set(), set(), {}
         for spec in specs:
             provider, _, model = spec.partition(":")
             if provider not in PROVIDERS or not model:
@@ -116,17 +116,24 @@ class Teachers:
                 model = self.models[self.i % len(self.models)]
                 self.i += 1
             try:
-                return model.chat([prompt], temperature, max_tokens=max_tokens)[0], model.label
+                out = model.chat([prompt], temperature, max_tokens=max_tokens)[0], model.label
+                self.fails[model.label] = 0  # it worked, reset its failure streak
+                return out
             except ModelUnavailable as e:
-                if not re.search(r"error (429|402|401|404)|could not reach|daily limit", str(e)):
-                    raise  # a problem with this prompt, not with the teacher
-                print(f"  teacher {model.label} dropped: {str(e)[:200]}", flush=True)
+                msg = str(e)
+                # ModelUnavailable is only raised for HTTP/network errors, never bad content, so it's always the
+                # teacher's fault, not the prompt's.
+                self.fails[model.label] = self.fails.get(model.label, 0) + 1
+                dead = ("daily limit" in msg or "error 401" in msg)  # account done for the day, or bad key
+                overloaded = self.fails[model.label] >= 4  # keeps 500/502/503/504-ing: stop wasting time on it
+                if not (dead or overloaded):
+                    continue  # transient - let another teacher take the next turn, try this one again later
+                print(f"  teacher {model.label} dropped ({msg[:150]})", flush=True)
                 with self.lock:
                     if model not in self.models:
                         continue
                     self.models.remove(model)
-                    if "daily limit" in str(e) or "error 401" in str(e):
-                        # the whole account is done for today (or the key is wrong) - other models won't help
+                    if dead:
                         self.exhausted.add(model.provider)
                         self.models = [m for m in self.models if m.provider != model.provider]
                     if self.auto:
