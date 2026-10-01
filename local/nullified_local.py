@@ -281,15 +281,30 @@ def gate(llm: Team, requests: list[str]) -> list[str | None]:
     return decisions
 
 
-def solve(llm: Team, checker: Checker, index, symbols, requests: list[str], fix_rounds: int) -> list[dict]:
-    blocked = gate(llm, requests)
+def fix_view(files: dict[str, str], stage: str, errors: list[str]) -> dict[str, str]:
+    """The files a fix needs to see. Compile errors name their files, so the rest stays out of the prompt
+    (on a CPU, every token of prompt costs time). Falls back to everything when unsure."""
+    if stage == "compile":
+        named = {p for p in files if any(p in e for e in errors)}
+        if named:
+            return {p: files[p] for p in files if p in named or p.endswith("fabric.mod.json")}
+    if stage in ("assets", "json"):
+        return {p: b for p, b in files.items() if not p.endswith(".java")}
+    return files
+
+
+def solve(llm: Team, checker: Checker, index, symbols, requests: list[str], fix_rounds: int,
+          use_gate: bool = True, reference_chars: int = 36000) -> list[dict]:
+    # Without the gate, restrictions.txt is still enforced by the system prompt (the model answers REFUSED)
+    # and by the code scanner in every check.
+    blocked = gate(llm, requests) if use_gate else [None] * len(requests)
     records = [{"id": f"req{i}", "request": req, "plan": "", "files": {}, "refused": rule, "ok": False,
                 "stage": "refused" if rule else None, "errors": [], "stage_history": []}
                for i, (req, rule) in enumerate(zip(requests, blocked))]
 
     allowed = [r for r in records if not r["refused"]]
     print(f"Writing {len(allowed)} mod(s) with {llm.main.label}...", flush=True)
-    budget = min(36000, llm.context)  # chars of reference docs; keeps prompt + answer inside the context window
+    budget = min(reference_chars, llm.context)  # chars of reference docs; prompt + answer must fit the context
     prompts = [SOLVE_PROMPT.format(version=VERSION, request=r["request"],
                                    reference=index.context_for(r["request"], budget_chars=budget))
                for r in allowed]
@@ -329,7 +344,9 @@ def solve(llm: Team, checker: Checker, index, symbols, requests: list[str], fix_
             break
         print(f"Round {rnd}: fixing {len(failing)} mod(s) with {llm.main.label}...", flush=True)
         prompts = [FIX_PROMPT.format(version=VERSION, stage=STAGE_EXPLAINED[r["stage"]], request=r["request"],
-                                     files=format_files(r["files"]),
+                                     files=format_files(fix_view(r["files"], r["stage"], r["errors"])
+                                                        if r["stage_history"][-2:] != ["compile", "compile"]
+                                                        else r["files"]),  # stuck: show everything
                                      errors="\n\n".join(e[:600] for e in r["errors"][:15]),
                                      hints=symbols.hints_for_errors(r["errors"], r["files"])[:min(20000, budget)]
                                      + runtime_hints(r["errors"]))
@@ -350,7 +367,8 @@ def solve(llm: Team, checker: Checker, index, symbols, requests: list[str], fix_
 
 def cmd_build(args, llm: Team, checker, index, symbols):
     started = time.time()
-    rec = solve(llm, checker, index, symbols, [args.request], args.fix_rounds)[0]
+    rec = solve(llm, checker, index, symbols, [args.request], args.fix_rounds, not args.skip_gate,
+                args.reference_chars)[0]
     out = ROOT / "output"
     out.mkdir(exist_ok=True)
     # Everything about the attempt, so a build that ran somewhere else (GitHub runner) can be inspected.
@@ -392,7 +410,7 @@ def cmd_build(args, llm: Team, checker, index, symbols):
 def cmd_evaluate(args, llm: Team, checker, index, symbols):
     requests = [e["request"] for e in json.loads((ROOT / "tools" / "eval_requests.json").read_text())]
     requests = requests[:args.limit] if args.limit else requests
-    recs = solve(llm, checker, index, symbols, requests, args.fix_rounds)
+    recs = solve(llm, checker, index, symbols, requests, args.fix_rounds, not args.skip_gate, args.reference_chars)
     rounds = max(len(r["stage_history"]) for r in recs)
     per_round = [sum(1 for r in recs if len(r["stage_history"]) > k and r["stage_history"][k] == "passed"
                      or (len(r["stage_history"]) <= k and r["ok"])) for k in range(rounds)]
@@ -467,6 +485,10 @@ def main():
         s.add_argument("--ref", default="", help="branch the check-mod workflow runs on (default: repo default)")
         s.add_argument("--reference-dir", default="", help="folder with the 1.21.11 reference .jsonl files")
         s.add_argument("--fix-rounds", type=int, default=4 if name == "build" else 3)
+        s.add_argument("--skip-gate", action="store_true",
+                       help="skip the separate restrictions.txt check (the model and the code scanner still enforce it)")
+        s.add_argument("--reference-chars", type=int, default=36000,
+                       help="how much 1.21.11 reference material goes into the first prompt")
         if name == "build":
             s.add_argument("--request", required=True)
         else:
