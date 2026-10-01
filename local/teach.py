@@ -38,10 +38,16 @@ ALLOWED = re.compile(r"qwen|deepseek|nemotron|mistral|mixtral|devstral|codestral
 SKIP = re.compile(r"safety|guard|nano|embed|rerank|vision|-vl|ocr|audio|tts|whisper", re.I)
 
 
+def model_size(model_id: str) -> float:
+    """Parameter count in billions from the name (e.g. ...-550b-a55b -> 550); 0 when the name doesn't say."""
+    sizes = [float(x) for x in re.findall(r"(\d+(?:\.\d+)?)b(?![a-z])", model_id.lower())]
+    return max(sizes) if sizes else 0.0
+
+
 def big_enough(model_id: str) -> bool:
     """Skip models that are clearly small (the name says under 20B); unknown sizes are allowed."""
-    sizes = [float(x) for x in re.findall(r"(\d+(?:\.\d+)?)b(?![a-z])", model_id.lower())]
-    return not sizes or max(sizes) >= 20
+    size = model_size(model_id)
+    return size == 0 or size >= 20
 
 
 class Teachers:
@@ -93,7 +99,8 @@ class Teachers:
             return
         if provider == "openrouter":
             listed = [m for m in listed if m["id"].endswith(":free")]
-        listed.sort(key=lambda m: -(m.get("context_length") or m.get("context_window") or 0))
+        # Biggest model first (by the size in its name, e.g. 550b), then the longest context.
+        listed.sort(key=lambda m: (-model_size(m["id"]), -(m.get("context_length") or m.get("context_window") or 0)))
         for m in listed:
             mid = m["id"]
             if (provider, mid) not in self.tried and ALLOWED.search(mid) and not SKIP.search(mid) and big_enough(mid):
