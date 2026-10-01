@@ -37,13 +37,14 @@ jobs:
       contents: read
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      MODEL_DIR: /mnt/model
+      WORK: /mnt/nai
+      MODEL_DIR: /mnt/nai/model
     steps:
       - name: free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
-          sudo mkdir -p $MODEL_DIR && sudo chown $USER $MODEL_DIR
-          df -h / /mnt; free -g
+          sudo mkdir -p $WORK && sudo chown -R $USER $WORK && mkdir -p $MODEL_DIR
+          df -h / /mnt || true; free -g
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
         with:
@@ -61,13 +62,29 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          url=$(gh api repos/ggml-org/llama.cpp/releases/latest --jq '.assets[] | select(.name | test("bin-ubuntu-x64\\.(zip|tar\\.gz)$")) | .browser_download_url' | head -1)
-          echo "llama.cpp: $url"
-          mkdir -p /mnt/llama && cd /mnt/llama && curl -sSL "$url" -o pkg
-          (unzip -q pkg || tar xzf pkg) && rm pkg
-          bin=$(dirname "$(find /mnt/llama -name llama-server -type f | head -1)")
-          echo "$bin" >> $GITHUB_PATH
-          echo "LD_LIBRARY_PATH=$bin:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          mkdir -p $WORK/llama && cd $WORK/llama
+          # Prebuilt Linux CPU build if the latest release has one, otherwise compile it (~5 min).
+          gh api repos/ggml-org/llama.cpp/releases/latest --jq '.assets[].name' > assets.txt || true
+          echo "release assets:"; cat assets.txt
+          name=$(grep -iE 'ubuntu' assets.txt | grep -iE 'x64|x86_64' \
+                 | grep -viE 'vulkan|cuda|rocm|hip|sycl|openvino|kompute|arm|aarch64|s390' | head -1 || true)
+          if [ -n "$name" ]; then
+            gh release download --repo ggml-org/llama.cpp --pattern "$name" --output pkg
+            (unzip -q pkg || tar xzf pkg) && rm pkg
+          fi
+          bin=$(find $WORK/llama -name llama-server -type f 2>/dev/null | head -1)
+          if [ -z "$bin" ]; then
+            echo "no prebuilt llama-server - building from source"
+            git clone --depth 1 https://github.com/ggml-org/llama.cpp src
+            cmake -S src -B build -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF > /dev/null
+            cmake --build build --target llama-server -j $(nproc) > build.log 2>&1 || (tail -50 build.log; exit 1)
+            bin=$(find $WORK/llama/build -name llama-server -type f | head -1)
+          fi
+          chmod +x "$bin"
+          dir=$(dirname "$bin")
+          echo "$dir" >> $GITHUB_PATH
+          echo "LD_LIBRARY_PATH=$dir:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          "$bin" --version || true
       - name: download model + reference docs
         env:
           MODEL_REPO: ${{ inputs.model_repo }}
@@ -81,9 +98,9 @@ jobs:
         run: |
           # The weights are memory-mapped, so while Gradle/Minecraft run, Linux can borrow that RAM back.
           nohup llama-server -m "$MODEL_DIR/$MODEL_FILE" --host 127.0.0.1 --port 8080 -c 24576 -np 1 \
-            -t $(nproc) --jinja > /mnt/llama-server.log 2>&1 &
+            -t $(nproc) --jinja > $WORK/llama-server.log 2>&1 &
           for i in $(seq 1 120); do curl -sf http://127.0.0.1:8080/health >/dev/null && echo "model ready" && exit 0; sleep 5; done
-          tail -50 /mnt/llama-server.log; exit 1
+          tail -50 $WORK/llama-server.log; exit 1
       - name: build the mod
         env:
           REQUEST: ${{ inputs.request }}
@@ -109,7 +126,7 @@ jobs:
           jars = list(pathlib.Path("output").glob("*/*.jar"))
           if jars: print(f"\nDownload **mod** from the Artifacts section below: `{jars[0].name}`")
           PY
-          tail -5 /mnt/llama-server.log || true
+          tail -5 $WORK/llama-server.log || true
       - uses: actions/upload-artifact@v7
         if: always()
         with:
