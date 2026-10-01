@@ -29,6 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 from restrictions import load_restrictions  # noqa: E402
+from runtime_check import fix_data_dirs  # noqa: E402
 from prompts import (FIX_PROMPT, SOLVE_PROMPT, STAGE_EXPLAINED, format_files, looks_looped,  # noqa: E402
                      parse_answer, parse_review, review_prompt, runtime_hints, system_prompt)
 
@@ -312,6 +313,8 @@ def solve(llm: Team, checker: Checker, index, symbols, requests: list[str], fix_
                  first_answer=out["text"], first_finish=out["finish"])
 
     for rnd in range(fix_rounds + 1):
+        for r in records:
+            r["files"] = fix_data_dirs(r["files"])
         todo = [r for r in records if r["files"] and not r["ok"]]
         if todo:
             print(f"Round {rnd}: checking {len(todo)} mod(s)...", flush=True)

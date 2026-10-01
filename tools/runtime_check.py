@@ -21,6 +21,12 @@ simulation-distance=2
 sync-chunk-writes=false
 """
 PROBLEM_LINE = re.compile(r"(Exception|Error:|Caused by|FATAL|Mixin apply .* failed|Could not execute entrypoint|Incompatible mods)")
+# Data folders Minecraft 1.21 renamed to singular; files in the old folders are silently ignored by the game.
+OLD_DATA_DIRS = {"recipes": "recipe", "loot_tables": "loot_table", "advancements": "advancement",
+                 "functions": "function", "structures": "structure", "predicates": "predicate",
+                 "item_modifiers": "item_modifier", "tags/items": "tags/item", "tags/blocks": "tags/block",
+                 "tags/entity_types": "tags/entity_type", "tags/fluids": "tags/fluid",
+                 "tags/game_events": "tags/game_event", "tags/functions": "tags/function"}
 NOISE = re.compile(r"(Environment: Environment|Failed to (retrieve|fetch) profile|Couldn't load server icon|com\.mojang\.authlib)")
 
 
@@ -68,6 +74,20 @@ def run_server(work: Path, probe_jar: Path, gradlew: str = "./gradlew", timeout:
     if timed_out:
         return False, extract_runtime_errors(output) or [f"server did not finish starting within {timeout}s"], {}
     return False, extract_runtime_errors(output) or [output[-3000:]], {}
+
+
+def fix_data_dirs(files: dict[str, str]) -> dict[str, str]:
+    """Move files out of data folders 1.21 renamed (recipes/ -> recipe/ ...). Purely mechanical, so no model needed."""
+    out = {}
+    for path, body in files.items():
+        m = re.match(r"(src/main/resources/data/[^/]+/)(.+)$", path)
+        if m:
+            for old, new in OLD_DATA_DIRS.items():
+                if m.group(2).startswith(old + "/"):
+                    path = m.group(1) + new + m.group(2)[len(old):]
+                    break
+        out.setdefault(path, body)
+    return out
 
 
 def _models_in(node) -> list[str]:
@@ -148,6 +168,22 @@ def validate_assets(files: dict[str, str], probe: dict) -> list[str]:
         lang_key = f"block.{ns}.{path}" if item_id in block_item_of else f"item.{ns}.{path}"
         if lang_key not in lang and f"item.{ns}.{path}" not in lang:
             problems.append(f"lang/en_us.json is missing \"{lang_key}\"")
+
+    for path in files:
+        m = re.match(r"src/main/resources/data/([^/]+)/(.+)$", path)
+        if not m:
+            continue
+        for old, new in OLD_DATA_DIRS.items():
+            if m.group(2).startswith(old + "/"):
+                fixed = f"src/main/resources/data/{m.group(1)}/{new}/{m.group(2)[len(old) + 1:]}"
+                problems.append(f"{path} is in the old folder data/{m.group(1)}/{old}/ which 1.21 ignores - "
+                                f"move it to {fixed}")
+                break
+        if m.group(2).startswith(("recipe/", "loot_table/", "advancement/")) and path.endswith(".json"):
+            try:
+                json.loads(files[path])
+            except json.JSONDecodeError as e:
+                problems.append(f"{path} is not valid JSON: {e}")
 
     mod_json = load("src/main/resources/fabric.mod.json")
     if isinstance(mod_json, dict) and isinstance(mod_json.get("icon"), str) and f"src/main/resources/{mod_json['icon']}" not in files:
