@@ -2,7 +2,8 @@
 # boots each one on a real 1.21.11 server, and failures go back to the teacher to fix. Results are saved to your
 # private Hugging Face dataset <you>/nullified-ai-data/raw/<run>-p<part>.jsonl as the night goes on.
 #
-# Secrets: OPENROUTER_API_KEY (and/or GROQ_API_KEY, CEREBRAS_API_KEY), HF_TOKEN (write access, to save the data).
+# Secrets: OPENROUTER_API_KEY (and/or GROQ_API_KEY, CEREBRAS_API_KEY, NVIDIA_API_KEY - every provider with a key
+# is used as a backup when another runs out), HF_TOKEN (write access, to save the data).
 # The data only goes to Hugging Face (private): artifacts of a public repo could be downloaded by anyone.
 name: teach
 run-name: "teach ${{ inputs.run }}"
@@ -13,8 +14,8 @@ on:
         description: "Name for this batch (e.g. night1) - use a new name each night"
         required: true
       teachers:
-        description: "Comma-separated provider:model, e.g. openrouter:<model id>,openrouter:<model id>"
-        required: true
+        description: "Comma-separated provider:model (more are added automatically when these run out)"
+        default: "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free,openrouter:nvidia/nemotron-3-super-120b-a12b:free,openrouter:qwen/qwen3.8-27b:free"
       per_combo:
         description: "Mod requests per topic x difficulty (19 topics x 3 difficulties)"
         default: "4"
@@ -43,6 +44,7 @@ jobs:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v6

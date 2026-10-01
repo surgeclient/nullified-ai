@@ -43,6 +43,7 @@ PROVIDERS = {  # name -> (api base, env var holding the key, where to get a free
     "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", "https://openrouter.ai/keys"),
     "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY", "https://console.groq.com/keys"),
     "cerebras": ("https://api.cerebras.ai/v1", "CEREBRAS_API_KEY", "https://cloud.cerebras.ai"),
+    "nvidia": ("https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY", "https://build.nvidia.com"),
     "ollama": ("http://localhost:11434", "", "https://ollama.com/download"),
     "server": ("http://127.0.0.1:8080/v1", "", ""),  # llama.cpp llama-server (what the GitHub runner uses)
 }
@@ -120,7 +121,7 @@ class Model:
                     out = self._post("/api/chat", body)
                 text, finish = out["message"].get("content") or "", out.get("done_reason")
         except urllib.error.HTTPError as e:
-            detail = e.read().decode(errors="ignore")[:500]
+            detail = ((e.read().decode(errors="ignore") if e.fp else "") or str(e.msg))[:500]
             hint = {401: "the API key is missing or wrong", 402: "this model isn't free - pick one from `models`",
                     404: "unknown model - run `python local/nullified_local.py models`"}.get(e.code, "")
             raise ModelUnavailable(f"{self.label}: error {e.code} {hint}\n{detail}")

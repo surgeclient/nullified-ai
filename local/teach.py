@@ -16,6 +16,7 @@ import re
 import sys
 import threading
 import time
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -32,23 +33,73 @@ class OutOfQuota(Exception):
     pass
 
 
-class Teachers:
-    """Round-robin over teacher models; a teacher that keeps failing (daily limit reached) is dropped."""
+# Teacher families whose licenses allow training on their outputs (check each model page to be sure).
+ALLOWED = re.compile(r"qwen|deepseek|nemotron|mistral|mixtral|devstral|codestral|glm|kimi|minimax", re.I)
+SKIP = re.compile(r"safety|guard|nano|embed|rerank|vision|-vl|ocr|audio|tts|whisper", re.I)
 
-    def __init__(self, specs: list[str], context: int):
+
+def big_enough(model_id: str) -> bool:
+    """Skip models that are clearly small (the name says under 20B); unknown sizes are allowed."""
+    sizes = [float(x) for x in re.findall(r"(\d+(?:\.\d+)?)b(?![a-z])", model_id.lower())]
+    return not sizes or max(sizes) >= 20
+
+
+class Teachers:
+    """Round-robin over teacher models. A teacher that keeps failing is dropped and, when possible, replaced by
+    another allowed model from the same provider; when a provider's whole daily quota is used up, the run
+    continues with the other providers you have keys for."""
+
+    def __init__(self, specs: list[str], context: int, auto: bool = True):
+        self.context, self.auto = context, auto
         self.models, self.lock, self.i = [], threading.Lock(), 0
+        self.tried, self.exhausted = set(), set()
         for spec in specs:
             provider, _, model = spec.partition(":")
             if provider not in PROVIDERS or not model:
                 sys.exit(f"teacher must look like provider:model-id, got {spec!r}")
-            base, key_env, key_url = PROVIDERS[provider]
-            key = os.environ.get(key_env, "") if key_env else ""
-            if key_env and not key:
-                print(f"skipping {spec}: {key_env} is not set ({key_url})")
-                continue
-            self.models.append(Model(base, model, context, 1, key, label=model))
+            self._add(provider, model)
+        if auto:  # every other provider you have a key for joins as a backup
+            for provider, (_, key_env, _) in PROVIDERS.items():
+                if key_env and os.environ.get(key_env) and not any(m.provider == provider for m in self.models):
+                    self._refill(provider)
         if not self.models:
-            sys.exit("no usable teachers")
+            sys.exit("no usable teachers (check the model ids and that the API key secrets are set)")
+        print("teachers: " + ", ".join(f"{m.provider}:{m.model}" for m in self.models), flush=True)
+
+    def _add(self, provider: str, model: str) -> bool:
+        base, key_env, key_url = PROVIDERS[provider]
+        key = os.environ.get(key_env, "") if key_env else ""
+        if key_env and not key:
+            print(f"skipping {provider}:{model}: {key_env} is not set ({key_url})")
+            return False
+        self.tried.add((provider, model))
+        m = Model(base, model, self.context, 1, key, label=f"{provider}:{model}")
+        m.provider = provider
+        self.models.append(m)
+        return True
+
+    def _refill(self, provider: str) -> None:
+        """Add the biggest-context allowed model from this provider that hasn't been tried yet."""
+        if provider in self.exhausted or provider in ("ollama", "server"):
+            return
+        base, key_env, _ = PROVIDERS[provider]
+        try:
+            req = urllib.request.Request(base.rstrip("/") + "/models",
+                                         headers={"Authorization": f"Bearer {os.environ.get(key_env, '')}"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                listed = json.loads(resp.read())["data"]
+        except Exception as e:
+            print(f"  could not list {provider} models: {str(e)[:150]}", flush=True)
+            return
+        if provider == "openrouter":
+            listed = [m for m in listed if m["id"].endswith(":free")]
+        listed.sort(key=lambda m: -(m.get("context_length") or m.get("context_window") or 0))
+        for m in listed:
+            mid = m["id"]
+            if (provider, mid) not in self.tried and ALLOWED.search(mid) and not SKIP.search(mid) and big_enough(mid):
+                print(f"  adding teacher {provider}:{mid}", flush=True)
+                self._add(provider, mid)
+                return
 
     def chat(self, prompt: str, temperature: float, max_tokens: int = 14000) -> tuple[dict, str]:
         while True:
@@ -58,14 +109,21 @@ class Teachers:
                 model = self.models[self.i % len(self.models)]
                 self.i += 1
             try:
-                return model.chat([prompt], temperature, max_tokens=max_tokens)[0], model.model
+                return model.chat([prompt], temperature, max_tokens=max_tokens)[0], model.label
             except ModelUnavailable as e:
-                if not re.search(r"error (429|402|401)|could not reach|daily limit", str(e)):
+                if not re.search(r"error (429|402|401|404)|could not reach|daily limit", str(e)):
                     raise  # a problem with this prompt, not with the teacher
                 print(f"  teacher {model.label} dropped: {str(e)[:200]}", flush=True)
                 with self.lock:
-                    if model in self.models:
-                        self.models.remove(model)
+                    if model not in self.models:
+                        continue
+                    self.models.remove(model)
+                    if "daily limit" in str(e) or "error 401" in str(e):
+                        # the whole account is done for today (or the key is wrong) - other models won't help
+                        self.exhausted.add(model.provider)
+                        self.models = [m for m in self.models if m.provider != model.provider]
+                    if self.auto:
+                        self._refill(model.provider)
 
 
 def main():
@@ -81,12 +139,14 @@ def main():
     p.add_argument("--minutes", type=float, default=330, help="stop starting new mods after this long")
     p.add_argument("--context", type=int, default=32768)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--no-auto", action="store_true",
+                   help="only use the listed teachers (default: replace ones that run out, add other providers)")
     p.add_argument("--require-hf", action="store_true", help="stop at once if the data can't be saved to Hugging Face")
     args = p.parse_args()
 
     started = time.time()
     deadline = started + args.minutes * 60
-    teachers = Teachers([t.strip() for t in args.teachers.split(",") if t.strip()], args.context)
+    teachers = Teachers([t.strip() for t in args.teachers.split(",") if t.strip()], args.context, not args.no_auto)
     index, symbols = load_reference("")
     import mod_checks  # Java + Gradle on this machine
     check_lock = threading.Lock()
