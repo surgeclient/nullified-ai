@@ -41,3 +41,14 @@ Priority order: get the coding model trained and working first. Everything below
 ## Restrictions
 - After training, lean on a request-side check (does the ask hint at something in restrictions.txt?) and trim the
   code scanner (tools/restrictions.py). Keep a minimal scanner for clear-malware patterns.
+
+## Security specialist model (a main product direction)
+Goal: a coding/security model companies can buy to test and protect their OWN sites/apps, respond to breaches,
+and clean up their OWN exposed data. A legitimate pentest/security-tooling product.
+- Knows cybersecurity deeply: how attacks work (DDoS, injection, XSS, auth flaws, phishing, doxxing exposure),
+  so it can explain, test, harden and defend.
+- Posture: DEFENDER + AUTHORIZED TESTER only. It never builds or runs attacks against targets the user doesn't own.
+- Authorization gate: before any live action against a target, the product confirms the user owns it / has written
+  permission (a "scope agreement", like every real pentest tool). "Erase data" = the user's OWN data or data they
+  are authorized to remove - never someone else's systems.
+- This keeps it powerful and legally sellable: the knowledge is the value; permission is what makes use lawful.
