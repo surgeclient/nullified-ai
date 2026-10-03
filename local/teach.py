@@ -207,7 +207,8 @@ def main():
                                                          difficulty=DIFFICULTY[diff]), 0.9, max_tokens=3000)
             text = out["text"]
             reqs = json.loads(text[text.index("["):text.rindex("]") + 1])
-        except (ValueError, OutOfQuota, ModelUnavailable):
+        except Exception as e:  # never let request generation crash the whole run
+            print(f"  request batch for {topic}/{diff} failed: {str(e).splitlines()[0][:150]}", flush=True)
             return []
         return [{"topic": topic, "difficulty": diff, "request": r.strip()} for r in reqs[:args.per_combo]
                 if isinstance(r, str) and len(r.strip()) > 15]

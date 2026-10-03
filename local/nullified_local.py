@@ -21,6 +21,7 @@ import os
 import re
 import sys
 import time
+import http.client
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -75,7 +76,7 @@ class Model:
                 with urllib.request.urlopen(req, timeout=3 * 3600) as resp:
                     return json.loads(resp.read())
             except urllib.error.HTTPError as e:
-                if e.code not in (429, 502, 503) or attempt == 7:
+                if e.code not in (429, 500, 502, 503, 504) or attempt == 7:
                     raise
                 if e.code == 429:
                     body = e.read().decode(errors="ignore")
@@ -85,6 +86,10 @@ class Model:
                 wait = min(float(e.headers.get("Retry-After") or 0) or 10 * 2 ** attempt, 300)
                 print(f"    {self.label}: busy/rate limited ({e.code}), retrying in {wait:.0f}s...", flush=True)
                 time.sleep(wait)
+            except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+                if attempt == 7:
+                    raise ModelUnavailable(f"{self.label}: could not reach {self.api_base} ({e})")
+                time.sleep(min(10 * 2 ** attempt, 120))  # transient network drop (RemoteDisconnected etc.) - retry
 
     def _one(self, prompt: str, temperature: float, max_tokens: int, repetition_penalty: float) -> dict:
         messages = [{"role": "system", "content": self.system}, {"role": "user", "content": prompt}]
@@ -127,6 +132,10 @@ class Model:
             raise ModelUnavailable(f"{self.label}: error {e.code} {hint}\n{detail}")
         except urllib.error.URLError as e:
             raise ModelUnavailable(f"{self.label}: could not reach {self.api_base} ({e.reason})")
+        except ModelUnavailable:
+            raise
+        except Exception as e:  # any other network/parse hiccup is the teacher's problem, not a crash
+            raise ModelUnavailable(f"{self.label}: request failed ({type(e).__name__}: {str(e)[:200]})")
         return {"text": THINK.sub("", text).strip(), "finish": finish}
 
     def chat(self, prompts: list[str], temperature: float, max_tokens: int = 14000,
