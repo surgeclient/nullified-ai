@@ -42,7 +42,18 @@ Priority order: get the coding model trained and working first. Everything below
 - After training, lean on a request-side check (does the ask hint at something in restrictions.txt?) and trim the
   code scanner (tools/restrictions.py). Keep a minimal scanner for clear-malware patterns.
 
-## Security specialist model (a main product direction)
+## The coding model IS the security specialist (one model, not two)
+The main coding model itself knows security deeply - no separate security model. Same authorized-tester/defender
+posture as below.
+
+## Training data: 3 sources (don't rely 100% on other AIs)
+1. Teacher AIs - verified, compile+server-tested mods (current `teach` pipeline).
+2. Working GitHub repos - real code that builds. FILTER BY LICENSE: use permissive (MIT/Apache/BSD); skip GPL and
+   no-license. Verify it compiles before turning it into training examples. (User wants to send repos to scan.)
+3. Articles / docs - for KNOWLEDGE only (security concepts, API refs). Use as retrieval/Q&A facts, not verbatim
+   copyrighted text (same approach as the 1.21.11 reference corpus).
+
+## Security specialist posture (now part of the coding model)
 Goal: a coding/security model companies can buy to test and protect their OWN sites/apps, respond to breaches,
 and clean up their OWN exposed data. A legitimate pentest/security-tooling product.
 - Knows cybersecurity deeply: how attacks work (DDoS, injection, XSS, auth flaws, phishing, doxxing exposure),
