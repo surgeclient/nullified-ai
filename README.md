@@ -1,10 +1,9 @@
 # Nullified AI
 
-A team of specialist AI models (one base model + LoRA adapters) trained to write
-Fabric Minecraft mods for 1.21.11 and newer.
+A team of specialist AI models trained in cyber security
 
 ## Web page
-Build mods and start training data from https://surgeclient.github.io/nullified-ai/ (`docs/index.html`, served by
+Build code and start training data from https://surgeclient.github.io/nullified-ai/ (`docs/index.html`, served by
 GitHub Pages: Settings → Pages → Deploy from a branch → `main` / `/docs`). Your GitHub token stays in your browser.
 
 ## Run it free (no Modal)
@@ -40,6 +39,10 @@ Minecraft 1.21.11 · Fabric Loader 0.19.5 · Fabric API 0.141.6+1.21.11 · Mojan
 3. Data generator (open-weight teacher run on Modal with vLLM) + compile/restriction filter
 4. Modal training: base model + specialist adapters (Planner, Coder, Mixin, Assets, Fixer, Reviewer)
 5. Evaluation suite
+
+
+
+## IT IS A WORK IN PROGRESS AND WILL LIKELY NOT BE AVAILABLE WHEN ITS FINISHED 
 6. Request queue: request → specialists → build → `.zip` + `.jar`, with auto-fix on build errors
 7. Docs lookup for 26.x and newer
 
