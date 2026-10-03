@@ -160,6 +160,8 @@ def main():
 
     started = time.time()
     deadline = started + args.minutes * 60
+    present = [name for name, (_, env, _) in PROVIDERS.items() if env and os.environ.get(env)]
+    print(f"provider API keys detected: {present or 'NONE'}", flush=True)
     teachers = Teachers([t.strip() for t in args.teachers.split(",") if t.strip()], args.context, not args.no_auto)
     index, symbols = load_reference("")
     import mod_checks  # Java + Gradle on this machine
