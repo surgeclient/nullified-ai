@@ -46,27 +46,34 @@ def gh_api(path: str, token: str, params: dict | None = None):
             raise
 
 
-def find_repos(token: str, queries: list[str], per_query: int) -> list[dict]:
+def find_repos(token: str, queries: list[str], per_query: int, pages: int = 1) -> list[dict]:
     seen, out = set(), []
     for q in queries:
-        try:
-            res = gh_api("/search/repositories", token, {"q": q, "sort": "stars", "order": "desc",
-                                                         "per_page": min(per_query, 100)})
-        except Exception as e:
-            print(f"  search failed for {q!r}: {str(e)[:150]}", flush=True)
-            continue
-        for item in res.get("items", []):
-            if item["full_name"] in seen or item.get("fork") or item.get("archived"):
-                continue
-            seen.add(item["full_name"])
-            lic = ((item.get("license") or {}).get("spdx_id") or "").lower()
-            out.append({"full_name": item["full_name"], "clone_url": item["clone_url"],
-                        "default_branch": item["default_branch"], "license": lic,
-                        "description": item.get("description") or "", "stars": item.get("stargazers_count", 0)})
+        for order in ("desc", "asc"):  # stars desc AND asc widens past the same popular top-N each run
+            for page in range(1, pages + 1):
+                try:
+                    res = gh_api("/search/repositories", token,
+                                 {"q": q, "sort": "stars", "order": order,
+                                  "per_page": min(per_query, 100), "page": page})
+                except Exception as e:
+                    print(f"  search failed for {q!r} p{page}: {str(e)[:120]}", flush=True)
+                    break
+                items = res.get("items", [])
+                for item in items:
+                    if item["full_name"] in seen or item.get("fork") or item.get("archived"):
+                        continue
+                    seen.add(item["full_name"])
+                    lic = ((item.get("license") or {}).get("spdx_id") or "").lower()
+                    out.append({"full_name": item["full_name"], "clone_url": item["clone_url"],
+                                "default_branch": item["default_branch"], "license": lic,
+                                "description": item.get("description") or "",
+                                "stars": item.get("stargazers_count", 0)})
+                if len(items) < min(per_query, 100):
+                    break  # no more pages for this query/order
     return out
 
 
-def find_repos_by_code(token: str, code_queries: list[str], per_query: int) -> list[dict]:
+def find_repos_by_code(token: str, code_queries: list[str], per_query: int, pages: int = 1) -> list[dict]:
     """Find repos directly by a marker in their files (e.g. officialMojangMappings in build.gradle).
 
     This targets the exact mods we keep instead of filtering them out of a generic search, so it finds
@@ -75,17 +82,21 @@ def find_repos_by_code(token: str, code_queries: list[str], per_query: int) -> l
     """
     full_names = []
     for q in code_queries:
-        try:
-            res = gh_api("/search/code", token, {"q": q, "per_page": min(per_query, 100)})
-        except Exception as e:
-            print(f"  code search failed for {q!r}: {str(e)[:150]}", flush=True)
-            continue
-        for item in res.get("items", []):
-            repo = item.get("repository") or {}
-            fn = repo.get("full_name")
-            if fn and not repo.get("fork") and fn not in full_names:
-                full_names.append(fn)
-        time.sleep(2)  # code search has a tight secondary rate limit
+        for page in range(1, pages + 1):
+            try:
+                res = gh_api("/search/code", token, {"q": q, "per_page": min(per_query, 100), "page": page})
+            except Exception as e:
+                print(f"  code search failed for {q!r} p{page}: {str(e)[:120]}", flush=True)
+                break
+            items = res.get("items", [])
+            for item in items:
+                repo = item.get("repository") or {}
+                fn = repo.get("full_name")
+                if fn and not repo.get("fork") and fn not in full_names:
+                    full_names.append(fn)
+            time.sleep(2)  # code search has a tight secondary rate limit
+            if len(items) < min(per_query, 100):
+                break
     out = []
     for fn in full_names:
         try:
@@ -106,9 +117,9 @@ def is_mojang_fabric_121(repo_dir: Path) -> tuple[bool, str]:
     mod_jsons = list(repo_dir.rglob("fabric.mod.json"))
     if not mod_jsons:
         return False, "not a Fabric mod (no fabric.mod.json)"
-    gradle = ""
-    for name in ("build.gradle", "build.gradle.kts", "gradle.properties"):
-        for f in repo_dir.glob(name):
+    gradle = ""  # multi-module: mappings may live in a subproject's build.gradle, so scan recursively
+    for f in repo_dir.rglob("*"):
+        if f.is_file() and (f.name.endswith((".gradle", ".gradle.kts")) or f.name == "gradle.properties"):
             gradle += f.read_text(encoding="utf-8", errors="ignore") + "\n"
     if re.search(r'net\.fabricmc:yarn', gradle) and "officialMojangMappings" not in gradle:
         return False, "uses Yarn mappings (wrong API names for our template)"
@@ -174,6 +185,7 @@ def main():
     p.add_argument("--run", required=True)
     p.add_argument("--max-repos", type=int, default=60)
     p.add_argument("--per-query", type=int, default=30)
+    p.add_argument("--pages", type=int, default=2, help="search result pages to walk per query (widens the pool)")
     p.add_argument("--build", action="store_true", help="verify each mod actually builds (slow but real)")
     p.add_argument("--build-timeout", type=int, default=900)
     p.add_argument("--repos", default="", help="comma-separated owner/repo to use instead of searching")
@@ -194,17 +206,19 @@ def main():
                           "description": info.get("description") or "", "stars": info.get("stargazers_count", 0)})
     else:
         # Code search targets the exact mods we keep (Mojang mappings), so it yields far more than generic
-        # repo search, which mostly surfaces Yarn example/tutorial mods we reject. Run it first.
-        code_queries = ['officialMojangMappings 1.21 filename:build.gradle',
-                        'officialMojangMappings 1.21 filename:build.gradle.kts',
-                        'loom.officialMojangMappings fabric filename:build.gradle']
-        repos = find_repos_by_code(gh_token, code_queries, args.per_query)
+        # repo search, which mostly surfaces Yarn example/tutorial mods we reject. Run it first, over several
+        # version strings and pages so we see beyond the same popular top-N each run.
+        code_queries = [f'officialMojangMappings {v} filename:build.gradle' for v in ("1.21", "1.21.1", "1.21.11")]
+        code_queries += ['officialMojangMappings fabric filename:build.gradle.kts',
+                         'mappings loom.officialMojangMappings() filename:build.gradle']
+        repos = find_repos_by_code(gh_token, code_queries, args.per_query, pages=args.pages)
         code_names = {r["full_name"] for r in repos}
         print(f"{len(repos)} repos from code search (Mojang-mapped)", flush=True)
-        queries = ['fabric minecraft mod 1.21 language:Java',
-                   'fabric-mod 1.21 language:Java', 'minecraft fabric 1.21.1 language:Java',
+        queries = ['fabric minecraft mod 1.21 language:Java', 'fabric-mod 1.21 language:Java',
+                   'minecraft fabric 1.21.1 language:Java', 'fabric mod 1.21.11 language:Java',
                    'fabric example mod 1.21 language:Java', 'fabric mod tutorial 1.21 language:Java']
-        repos += [r for r in find_repos(gh_token, queries, args.per_query) if r["full_name"] not in code_names]
+        repos += [r for r in find_repos(gh_token, queries, args.per_query, pages=args.pages)
+                  if r["full_name"] not in code_names]
     print(f"{len(repos)} candidate repos", flush=True)
 
     records, work = [], Path(tempfile.mkdtemp(prefix="nai-repos-"))
