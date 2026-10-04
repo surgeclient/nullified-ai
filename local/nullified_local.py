@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 from restrictions import load_restrictions  # noqa: E402
 from runtime_check import fix_data_dirs  # noqa: E402
 from prompts import (FIX_PROMPT, SOLVE_PROMPT, STAGE_EXPLAINED, format_files, looks_looped,  # noqa: E402
-                     parse_answer, parse_review, review_prompt, runtime_hints, system_prompt)
+                     migration_hints, parse_answer, parse_review, review_prompt, runtime_hints, system_prompt)
 
 VERSION = "1.21.11"
 THINK = re.compile(r"<think>.*?</think>", re.S)
@@ -362,7 +362,8 @@ def solve(llm: Team, checker: Checker, index, symbols, requests: list[str], fix_
                                                         if r["stage_history"][-2:] != ["compile", "compile"]
                                                         else r["files"]),  # stuck: show everything
                                      errors="\n\n".join(e[:600] for e in r["errors"][:15]),
-                                     hints=symbols.hints_for_errors(r["errors"], r["files"])[:min(20000, budget)]
+                                     hints=migration_hints(r["errors"])
+                                     + symbols.hints_for_errors(r["errors"], r["files"])[:min(20000, budget)]
                                      + runtime_hints(r["errors"]))
                    for r in failing]
         outs = llm.chat(prompts, 0.2)

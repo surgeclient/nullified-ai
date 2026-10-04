@@ -115,6 +115,39 @@ def runtime_hints(errors: list[str]) -> str:
     return ("\n" + "\n".join(f"- {f}" for f in facts)) if facts else ""
 
 
+# Removed/renamed APIs the base model reaches for out of old-Minecraft memory -> the exact 1.21.11 replacement.
+# Each entry: list of trigger substrings (matched in the raw compile errors) -> one replacement instruction.
+MIGRATIONS = [
+    (["ResourceLocation"],
+     "`ResourceLocation` is not the name here. Use `net.minecraft.resources.Identifier` and build ids with "
+     "`Identifier.fromNamespaceAndPath(MOD_ID, path)` - there is no public `new ResourceLocation(...)` constructor."),
+    (["TAB_COMBAT", "TAB_TOOLS", "TAB_MISC", "CreativeModeTab.TAB", ".tab(", "ItemGroup"],
+     "Creative tabs are NOT set with `Item.Properties.tab(...)` or `CreativeModeTab.TAB_*` (both removed). Remove any "
+     "`.tab(...)` call, and add the item to a tab with an event: "
+     "`ItemGroupEvents.modifyEntriesEvent(CreativeModeTabs.COMBAT).register(e -> e.accept(THE_ITEM));` "
+     "(import `net.fabricmc.fabric.api.itemgroup.v1.ItemGroupEvents`; tab constants live on `CreativeModeTabs`)."),
+    (["SwordItem", "PickaxeItem", "AxeItem", "ShovelItem", "HoeItem", "DiggerItem", "class Tier", "Tiers"],
+     "`SwordItem`/`PickaxeItem`/`Tier`/`Tiers` do not exist. A tool is a plain `Item` built with a tool property: "
+     "`new Item(new Item.Properties().setId(key).sword(ToolMaterial.IRON, 3f, -2.4f))` "
+     "(also `.pickaxe/.axe/.shovel/.hoe`). Material constants: `ToolMaterial.WOOD/STONE/IRON/DIAMOND/NETHERITE`."),
+    (["CraftingManager", "ShapedRecipe", "ShapelessRecipe", "RecipeType.CRAFTING", "addRecipe"],
+     "Do NOT create recipes in Java (`ShapedRecipe`/`CraftingManager` are not used). Recipes are JSON data files at "
+     "`src/main/resources/data/<modid>/recipe/<name>.json` with type `minecraft:crafting_shaped` - delete the Java "
+     "recipe code and ship the JSON file instead."),
+    (["InteractionResultHolder"],
+     "`InteractionResultHolder` does not exist. `Item.use(...)` returns a plain `InteractionResult`."),
+]
+
+
+def migration_hints(errors: list[str]) -> str:
+    text = "\n".join(errors)
+    facts = []
+    for triggers, fix in MIGRATIONS:
+        if any(t in text for t in triggers) and fix not in facts:
+            facts.append(fix)
+    return ("\n" + "\n".join(f"- {f}" for f in facts)) if facts else ""
+
+
 FIX_PROMPT = """This Fabric mod for Minecraft {version} failed a check. {stage}
 
 <request>
