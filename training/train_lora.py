@@ -28,6 +28,8 @@ def main():
     p.add_argument("--rank", type=int, default=32)
     p.add_argument("--max-length", type=int, default=16384)
     p.add_argument("--max-seq-train", type=int, default=0, help="override context if VRAM is tight (e.g. 8192)")
+    p.add_argument("--attn-only", action="store_true",
+                   help="adapt only attention (not MoE experts); needed to fit a free T4")
     p.add_argument("--only", choices=["build", "fix", "both"], default="both", help="which example kinds to train on")
     p.add_argument("--gguf", action="store_true", help="also export a merged GGUF (needed to serve on the runner)")
     p.add_argument("--data-repo", default="", help="HF dataset (default <you>/nullified-ai-data)")
@@ -80,10 +82,14 @@ def main():
     max_seq = args.max_seq_train or args.max_length
     model, tokenizer = FastLanguageModel.from_pretrained(args.base, max_seq_length=max_seq, load_in_4bit=True,
                                                          dtype=None, full_finetuning=False)
+    # On a small GPU (free T4), adapting the 64 MoE expert projections in float32 blows past 14.5 GB.
+    # Attention-only LoRA cuts trainable params ~10x and fits, while still teaching API names and structure.
+    targets = ["q_proj", "k_proj", "v_proj", "o_proj"]
+    if not args.attn_only:
+        targets += ["gate_proj", "up_proj", "down_proj"]
     model = FastLanguageModel.get_peft_model(
         model, r=args.rank, lora_alpha=args.rank * 2, lora_dropout=0.0, bias="none",
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        use_gradient_checkpointing="unsloth", random_state=0)
+        target_modules=targets, use_gradient_checkpointing="unsloth", random_state=0)
 
     def to_text(e):
         return tokenizer.apply_chat_template(e["messages"], tokenize=False, add_generation_prompt=False)
@@ -100,12 +106,22 @@ def main():
                     warmup_ratio=0.05, num_train_epochs=args.epochs, learning_rate=args.lr, logging_steps=5,
                     optim="adamw_8bit", lr_scheduler_type="cosine", seed=0, report_to=[], max_length=max_seq)
     trainer = SFTTrainer(model=model, tokenizer=tokenizer, train_dataset=dataset, args=cfg)
-    # train only on the assistant's answers, not the prompt (standard for instruction tuning)
-    try:
-        trainer = train_on_responses_only(trainer, instruction_part="<|start|>user<|message|>",
-                                          response_part="<|start|>assistant<|message|>")
-    except Exception as e:
-        print(f"(training on full sequence; response-only masking unavailable: {str(e)[:120]})")
+    # train only on the assistant's answers, not the prompt (standard for instruction tuning).
+    # The marker pair depends on the base model's chat template: gpt-oss uses Harmony, Qwen/most others ChatML.
+    sample = to_text(examples[0])
+    if "<|start|>assistant<|message|>" in sample:
+        instr, resp = "<|start|>user<|message|>", "<|start|>assistant<|message|>"
+    elif "<|im_start|>assistant" in sample:
+        instr, resp = "<|im_start|>user\n", "<|im_start|>assistant\n"
+    else:
+        instr = resp = None
+    if resp:
+        try:
+            trainer = train_on_responses_only(trainer, instruction_part=instr, response_part=resp)
+        except Exception as e:
+            print(f"(training on full sequence; response-only masking failed: {str(e)[:120]})")
+    else:
+        print("(training on full sequence; unrecognized chat template markers)")
     trainer.train()
 
     out = Path("/tmp/adapter")
