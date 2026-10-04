@@ -12,12 +12,52 @@ from prompts import FIX_PROMPT, STAGE_EXPLAINED, STUDENT_SOLVE_PROMPT, format_fi
 STAGE_RANK = {"compile": 0, "runtime": 1, "assets": 2, "passed": 3}
 
 
+def _role_of(path: str) -> str:
+    p = path.lower()
+    if p.endswith("fabric.mod.json"):
+        return "mod metadata and entrypoints"
+    if p.endswith(".mixins.json") or "mixin" in p:
+        return "mixin configuration"
+    if p.endswith("lang/en_us.json"):
+        return "English translations"
+    if "/models/" in p:
+        return "model"
+    if "/blockstates/" in p:
+        return "blockstate"
+    if "/items/" in p:
+        return "item model definition"
+    if "/recipe" in p:
+        return "recipe"
+    if "/loot_table" in p:
+        return "loot table"
+    if "/tags/" in p:
+        return "tag"
+    if p.endswith(".java"):
+        return "Java class " + path.rsplit("/", 1)[-1][:-5]
+    return "resource"
+
+
+def synth_plan(files: dict, version: str) -> str:
+    """Real collected mods have no stored plan; derive a faithful one from their files so build examples
+    still teach the PLAN->files format the model is asked for at inference."""
+    mod_id = ""
+    try:
+        mod_id = json.loads(files["src/main/resources/fabric.mod.json"]).get("id", "")
+    except (KeyError, json.JSONDecodeError, AttributeError):
+        pass
+    lines = [f"mod id: {mod_id}" if mod_id else "mod id: (see fabric.mod.json)"]
+    for path in files:
+        lines.append(f"- {path}: {_role_of(path)}")
+    return "\n".join(lines)
+
+
 def build_examples(records: list[dict], version: str) -> list[dict]:
     system = system_prompt(version)
     out = []
     for r in records:
         if r.get("ok") and r["files"]:
-            answer = f"PLAN:\n{r['plan'].strip()}\n\n{format_files(r['files'])}"
+            plan = r["plan"].strip() or synth_plan(r["files"], version)
+            answer = f"PLAN:\n{plan}\n\n{format_files(r['files'])}"
             out.append({"kind": "build", "id": r["id"], "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": STUDENT_SOLVE_PROMPT.format(version=version, request=r["request"])},

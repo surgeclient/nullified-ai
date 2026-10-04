@@ -52,14 +52,20 @@ def main():
 
     from build_sft import build_examples, fix_examples
     from symbols import SymbolIndex
-    ref = snapshot_download(f"{user}/nullified-ai-reference", repo_type="dataset", token=token,
-                            allow_patterns=[f"{VERSION}/*"])
-    symbols = SymbolIndex.load(f"{ref}/{VERSION}/minecraft-{VERSION}.jsonl")
     examples = []
     if args.only in ("build", "both"):
         examples += build_examples(records, VERSION)
-    if args.only in ("fix", "both"):
-        examples += fix_examples(records, VERSION, symbols)
+    # Fix examples need the symbol reference AND records that actually have failed attempts (teacher data).
+    # Real collected mods have no attempts, so skip the reference download entirely when it isn't needed.
+    want_fix = args.only in ("fix", "both") and any(r.get("attempts") for r in records)
+    if want_fix:
+        try:
+            ref = snapshot_download(f"{user}/nullified-ai-reference", repo_type="dataset", token=token,
+                                    allow_patterns=[f"{VERSION}/*"])
+            symbols = SymbolIndex.load(f"{ref}/{VERSION}/minecraft-{VERSION}.jsonl")
+            examples += fix_examples(records, VERSION, symbols)
+        except Exception as e:
+            print(f"(skipping fix examples; reference unavailable: {str(e)[:150]})", flush=True)
     random.Random(0).shuffle(examples)
     kinds = {k: sum(e["kind"] == k for e in examples) for k in ("build", "fix")}
     print(f"{len(examples)} training examples {kinds}", flush=True)
