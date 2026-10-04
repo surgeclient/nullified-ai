@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -62,6 +63,41 @@ def find_repos(token: str, queries: list[str], per_query: int) -> list[dict]:
             out.append({"full_name": item["full_name"], "clone_url": item["clone_url"],
                         "default_branch": item["default_branch"], "license": lic,
                         "description": item.get("description") or "", "stars": item.get("stargazers_count", 0)})
+    return out
+
+
+def find_repos_by_code(token: str, code_queries: list[str], per_query: int) -> list[dict]:
+    """Find repos directly by a marker in their files (e.g. officialMojangMappings in build.gradle).
+
+    This targets the exact mods we keep instead of filtering them out of a generic search, so it finds
+    far more Mojang-mapped mods than repository search alone. Code search only returns the repo stub, so
+    we resolve each via /repos/{full} to get license/default_branch/stars.
+    """
+    full_names = []
+    for q in code_queries:
+        try:
+            res = gh_api("/search/code", token, {"q": q, "per_page": min(per_query, 100)})
+        except Exception as e:
+            print(f"  code search failed for {q!r}: {str(e)[:150]}", flush=True)
+            continue
+        for item in res.get("items", []):
+            repo = item.get("repository") or {}
+            fn = repo.get("full_name")
+            if fn and not repo.get("fork") and fn not in full_names:
+                full_names.append(fn)
+        time.sleep(2)  # code search has a tight secondary rate limit
+    out = []
+    for fn in full_names:
+        try:
+            info = gh_api(f"/repos/{fn}", token)
+        except Exception as e:
+            print(f"  resolve failed for {fn}: {str(e)[:120]}", flush=True)
+            continue
+        if info.get("archived") or info.get("fork"):
+            continue
+        out.append({"full_name": fn, "clone_url": info["clone_url"], "default_branch": info["default_branch"],
+                    "license": ((info.get("license") or {}).get("spdx_id") or "").lower(),
+                    "description": info.get("description") or "", "stars": info.get("stargazers_count", 0)})
     return out
 
 
@@ -157,10 +193,18 @@ def main():
                           "license": ((info.get("license") or {}).get("spdx_id") or "").lower(),
                           "description": info.get("description") or "", "stars": info.get("stargazers_count", 0)})
     else:
+        # Code search targets the exact mods we keep (Mojang mappings), so it yields far more than generic
+        # repo search, which mostly surfaces Yarn example/tutorial mods we reject. Run it first.
+        code_queries = ['officialMojangMappings 1.21 filename:build.gradle',
+                        'officialMojangMappings 1.21 filename:build.gradle.kts',
+                        'loom.officialMojangMappings fabric filename:build.gradle']
+        repos = find_repos_by_code(gh_token, code_queries, args.per_query)
+        code_names = {r["full_name"] for r in repos}
+        print(f"{len(repos)} repos from code search (Mojang-mapped)", flush=True)
         queries = ['fabric minecraft mod 1.21 language:Java',
                    'fabric-mod 1.21 language:Java', 'minecraft fabric 1.21.1 language:Java',
                    'fabric example mod 1.21 language:Java', 'fabric mod tutorial 1.21 language:Java']
-        repos = find_repos(gh_token, queries, args.per_query)
+        repos += [r for r in find_repos(gh_token, queries, args.per_query) if r["full_name"] not in code_names]
     print(f"{len(repos)} candidate repos", flush=True)
 
     records, work = [], Path(tempfile.mkdtemp(prefix="nai-repos-"))
