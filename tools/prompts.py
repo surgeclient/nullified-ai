@@ -93,6 +93,23 @@ STUDENT_SOLVE_PROMPT = SOLVE_PROMPT.replace("""<reference>
 
 """, "")
 
+# Focused single-file training: teaches one correct {version} file at a time (short, so almost all real mods fit
+# the training window). Many short, repeated lessons beat a few giant ones for a small model.
+FILE_PROMPT = """Write one file of a working Fabric mod for Minecraft {version} (Mojang mappings).
+
+<request>
+{request}
+</request>
+
+<mod_metadata file="src/main/resources/fabric.mod.json">
+{mod_json}
+</mod_metadata>
+
+Write EXACTLY this one file, complete and correct for {version}, in this format:
+=== FILE: {path} ===
+<complete file contents>
+=== END FILE ==="""
+
 STAGE_EXPLAINED = {
     "compile": "It failed to compile. The compiler errors are below.",
     "runtime": "It compiled, but it crashed or failed while a real 1.21.11 server was starting with it. The log is below.",
