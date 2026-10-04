@@ -1,0 +1,63 @@
+# Collect real, working, permissively-licensed Fabric 1.21.x mods from GitHub as training data.
+# (Teacher AIs don't know 1.21.11, so real published mods are the reliable data source.)
+# Secrets: HF_TOKEN (write, to save the dataset). Uses the built-in GITHUB_TOKEN to search/clone public repos.
+name: collect-mods
+run-name: "collect ${{ inputs.run }}"
+on:
+  workflow_dispatch:
+    inputs:
+      run:
+        description: "Batch name (e.g. repos1) - new name each time"
+        required: true
+      max_repos:
+        description: "How many mods to keep"
+        default: "60"
+      build:
+        description: "Verify each mod actually builds (slower, but real)"
+        type: boolean
+        default: true
+      repos:
+        description: "Optional: comma-separated owner/repo to use instead of searching"
+        default: ""
+
+jobs:
+  collect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    permissions:
+      contents: read
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: 'microsoft'
+      - uses: gradle/actions/setup-gradle@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: pip install -q huggingface_hub
+      - name: collect
+        env:
+          RUN: ${{ inputs.run }}
+          MAX_REPOS: ${{ inputs.max_repos }}
+          REPOS: ${{ inputs.repos }}
+          DO_BUILD: ${{ inputs.build }}
+        run: |
+          python tools/collect_repos.py --run "$RUN" --max-repos "$MAX_REPOS" \
+            ${DO_BUILD:+$( [ "$DO_BUILD" = "true" ] && echo --build )} \
+            ${REPOS:+--repos "$REPOS"}
+      - name: summary
+        if: always()
+        run: |
+          f=$(ls output/data/*.summary.json 2>/dev/null | head -1)
+          if [ -n "$f" ]; then echo '```' >> $GITHUB_STEP_SUMMARY; cat "$f" >> $GITHUB_STEP_SUMMARY; echo '```' >> $GITHUB_STEP_SUMMARY; fi
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: data
+          path: output/data/
+          retention-days: 14
