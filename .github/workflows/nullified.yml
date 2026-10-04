@@ -18,7 +18,7 @@ on:
         default: "3"
       model_repo:
         description: "Hugging Face repo with the model (.gguf)"
-        default: "ggml-org/gpt-oss-20b-GGUF"
+        default: "Zyflix/nullified-coder-gguf"
       model_file:
         description: ".gguf file in that repo (empty = pick automatically)"
         default: ""
