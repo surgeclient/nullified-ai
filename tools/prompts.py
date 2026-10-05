@@ -93,6 +93,23 @@ STUDENT_SOLVE_PROMPT = SOLVE_PROMPT.replace("""<reference>
 
 """, "")
 
+# Focused single-file training: teaches one correct {version} file at a time (short, so almost all real mods fit
+# the training window). Many short, repeated lessons beat a few giant ones for a small model.
+FILE_PROMPT = """Write one file of a working Fabric mod for Minecraft {version} (Mojang mappings).
+
+<request>
+{request}
+</request>
+
+<mod_metadata file="src/main/resources/fabric.mod.json">
+{mod_json}
+</mod_metadata>
+
+Write EXACTLY this one file, complete and correct for {version}, in this format:
+=== FILE: {path} ===
+<complete file contents>
+=== END FILE ==="""
+
 STAGE_EXPLAINED = {
     "compile": "It failed to compile. The compiler errors are below.",
     "runtime": "It compiled, but it crashed or failed while a real 1.21.11 server was starting with it. The log is below.",
@@ -112,6 +129,39 @@ RUNTIME_FACTS = {
 def runtime_hints(errors: list[str]) -> str:
     text = "\n".join(errors).lower()
     facts = [fact for key, fact in RUNTIME_FACTS.items() if key.lower() in text]
+    return ("\n" + "\n".join(f"- {f}" for f in facts)) if facts else ""
+
+
+# Removed/renamed APIs the base model reaches for out of old-Minecraft memory -> the exact 1.21.11 replacement.
+# Each entry: list of trigger substrings (matched in the raw compile errors) -> one replacement instruction.
+MIGRATIONS = [
+    (["ResourceLocation"],
+     "`ResourceLocation` is not the name here. Use `net.minecraft.resources.Identifier` and build ids with "
+     "`Identifier.fromNamespaceAndPath(MOD_ID, path)` - there is no public `new ResourceLocation(...)` constructor."),
+    (["TAB_COMBAT", "TAB_TOOLS", "TAB_MISC", "CreativeModeTab.TAB", ".tab(", "ItemGroup"],
+     "Creative tabs are NOT set with `Item.Properties.tab(...)` or `CreativeModeTab.TAB_*` (both removed). Remove any "
+     "`.tab(...)` call, and add the item to a tab with an event: "
+     "`ItemGroupEvents.modifyEntriesEvent(CreativeModeTabs.COMBAT).register(e -> e.accept(THE_ITEM));` "
+     "(import `net.fabricmc.fabric.api.itemgroup.v1.ItemGroupEvents`; tab constants live on `CreativeModeTabs`)."),
+    (["SwordItem", "PickaxeItem", "AxeItem", "ShovelItem", "HoeItem", "DiggerItem", "class Tier", "Tiers"],
+     "`SwordItem`/`PickaxeItem`/`Tier`/`Tiers` do not exist. A tool is a plain `Item` built with a tool property: "
+     "`new Item(new Item.Properties().setId(key).sword(ToolMaterial.IRON, 3f, -2.4f))` "
+     "(also `.pickaxe/.axe/.shovel/.hoe`). Material constants: `ToolMaterial.WOOD/STONE/IRON/DIAMOND/NETHERITE`."),
+    (["CraftingManager", "ShapedRecipe", "ShapelessRecipe", "RecipeType.CRAFTING", "addRecipe"],
+     "Do NOT create recipes in Java (`ShapedRecipe`/`CraftingManager` are not used). Recipes are JSON data files at "
+     "`src/main/resources/data/<modid>/recipe/<name>.json` with type `minecraft:crafting_shaped` - delete the Java "
+     "recipe code and ship the JSON file instead."),
+    (["InteractionResultHolder"],
+     "`InteractionResultHolder` does not exist. `Item.use(...)` returns a plain `InteractionResult`."),
+]
+
+
+def migration_hints(errors: list[str]) -> str:
+    text = "\n".join(errors)
+    facts = []
+    for triggers, fix in MIGRATIONS:
+        if any(t in text for t in triggers) and fix not in facts:
+            facts.append(fix)
     return ("\n" + "\n".join(f"- {f}" for f in facts)) if facts else ""
 
 

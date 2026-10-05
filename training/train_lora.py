@@ -31,6 +31,8 @@ def main():
     p.add_argument("--attn-only", action="store_true",
                    help="adapt only attention (not MoE experts); needed to fit a free T4")
     p.add_argument("--only", choices=["build", "fix", "both"], default="both", help="which example kinds to train on")
+    p.add_argument("--no-augment", action="store_true",
+                   help="skip the per-file lessons (by default each mod is also split into short single-file examples)")
     p.add_argument("--gguf", action="store_true", help="also export a merged GGUF (needed to serve on the runner)")
     p.add_argument("--data-repo", default="", help="HF dataset (default <you>/nullified-ai-data)")
     p.add_argument("--dry-run", action="store_true", help="build the dataset and stop (no GPU needed)")
@@ -52,11 +54,13 @@ def main():
     if not records:
         sys.exit("no records found - check --runs and that the overnight run saved data")
 
-    from build_sft import build_examples, fix_examples
+    from build_sft import build_examples, file_examples, fix_examples
     from symbols import SymbolIndex
     examples = []
     if args.only in ("build", "both"):
         examples += build_examples(records, VERSION)
+        if not args.no_augment:
+            examples += file_examples(records, VERSION)  # many short per-file lessons so all 65 mods are learned
     # Fix examples need the symbol reference AND records that actually have failed attempts (teacher data).
     # Real collected mods have no attempts, so skip the reference download entirely when it isn't needed.
     want_fix = args.only in ("fix", "both") and any(r.get("attempts") for r in records)
@@ -69,7 +73,7 @@ def main():
         except Exception as e:
             print(f"(skipping fix examples; reference unavailable: {str(e)[:150]})", flush=True)
     random.Random(0).shuffle(examples)
-    kinds = {k: sum(e["kind"] == k for e in examples) for k in ("build", "fix")}
+    kinds = {k: sum(e["kind"] == k for e in examples) for k in ("build", "file", "fix")}
     print(f"{len(examples)} training examples {kinds}", flush=True)
     if len(examples) < 20:
         print("WARNING: very few examples - the adapter will barely change the model. Gather more teacher data first.")

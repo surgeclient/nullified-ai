@@ -7,7 +7,8 @@ Two kinds of examples, both with the same system prompt the model gets at use ti
 """
 import json
 
-from prompts import FIX_PROMPT, STAGE_EXPLAINED, STUDENT_SOLVE_PROMPT, format_files, runtime_hints, system_prompt
+from prompts import (FIX_PROMPT, FILE_PROMPT, STAGE_EXPLAINED, STUDENT_SOLVE_PROMPT, format_files, runtime_hints,
+                     system_prompt)
 
 STAGE_RANK = {"compile": 0, "runtime": 1, "assets": 2, "passed": 3}
 
@@ -62,6 +63,36 @@ def build_examples(records: list[dict], version: str) -> list[dict]:
                 {"role": "system", "content": system},
                 {"role": "user", "content": STUDENT_SOLVE_PROMPT.format(version=version, request=r["request"])},
                 {"role": "assistant", "content": answer},
+            ]})
+    return out
+
+
+def file_examples(records: list[dict], version: str) -> list[dict]:
+    """Augmentation: one short lesson per file (write THIS file, given the request + mod metadata).
+
+    Each whole-mod example is long and often exceeds the training window, so most mods were dropped entirely.
+    Splitting every mod into per-file lessons makes almost all real mods fit, and a small model learns the correct
+    {version} API far better from many short, repeated examples than from a handful of giant ones.
+    """
+    system = system_prompt(version)
+    out = []
+    for r in records:
+        if not (r.get("ok") and r["files"]):
+            continue
+        files = r["files"]
+        mod_json = files.get("src/main/resources/fabric.mod.json", "{}")[:1500]
+        for path, content in files.items():
+            if path.endswith("fabric.mod.json"):
+                continue  # given as context, not asked for
+            if not path.endswith((".java", ".json", ".mcmeta")):
+                continue
+            if not content.strip():
+                continue
+            out.append({"kind": "file", "id": f"{r['id']}::{path}", "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": FILE_PROMPT.format(version=version, request=r["request"],
+                                                               mod_json=mod_json, path=path)},
+                {"role": "assistant", "content": format_files({path: content})},
             ]})
     return out
 
