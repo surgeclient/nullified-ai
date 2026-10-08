@@ -1,0 +1,76 @@
+# Merge a trained LoRA adapter into its base and export a servable GGUF, on GitHub's free CPU runner.
+# Use this when Colab trained + uploaded the adapter but the GGUF export didn't finish (e.g. the tab closed).
+# Uses llama.cpp's native convert/merge/quantize tools (they stream tensors, so no 16 GB OOM like a Python merge).
+# Secret: HF_TOKEN (write) to read the adapter and upload the GGUF.
+name: export-gguf
+run-name: "export-gguf ${{ inputs.adapter_repo }}"
+on:
+  workflow_dispatch:
+    inputs:
+      adapter_repo:
+        description: "HF repo with the trained LoRA adapter"
+        default: "Zyflix/nullified-coder"
+      base_repo:
+        description: "Base model the adapter was trained on"
+        default: "Qwen/Qwen2.5-Coder-7B-Instruct"
+      out_repo:
+        description: "HF model repo to upload the GGUF to (under your account)"
+        default: "nullified-coder-gguf"
+      quant:
+        description: "Quantization"
+        default: "Q4_K_M"
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      W: /mnt/nai
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: workspace on the big disk
+        run: |
+          sudo mkdir -p "$W" && sudo chown "$USER" "$W"
+          df -h / "$W" | sed 's/^/df: /'
+      - name: get + build llama.cpp (convert scripts + merge/quantize tools)
+        run: |
+          git clone -q --depth 1 https://github.com/ggml-org/llama.cpp "$W/llama"
+          pip install -q "huggingface_hub>=0.26" -r "$W/llama/requirements/requirements-convert_hf_to_gguf.txt"
+          cmake -S "$W/llama" -B "$W/llama/build" -DLLAMA_CURL=OFF -DGGML_NATIVE=OFF >/dev/null
+          cmake --build "$W/llama/build" --config Release -j"$(nproc)" --target llama-export-lora llama-quantize
+      - name: download base + adapter
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          t = os.environ.get("HF_TOKEN") or None
+          w = os.environ["W"]
+          snapshot_download("${{ inputs.base_repo }}", local_dir=f"{w}/base", token=t,
+                            allow_patterns=["*.safetensors", "*.json", "*.txt", "tokenizer*", "*.model", "merges.txt", "vocab.json"])
+          snapshot_download("${{ inputs.adapter_repo }}", local_dir=f"{w}/adapter", token=t)
+          print("downloaded base + adapter")
+          PY
+      - name: convert -> merge -> quantize
+        run: |
+          cd "$W/llama"
+          python convert_hf_to_gguf.py "$W/base" --outfile "$W/base-f16.gguf" --outtype f16
+          python convert_lora_to_gguf.py "$W/adapter" --base "$W/base" --outfile "$W/lora-f16.gguf" --outtype f16
+          ./build/bin/llama-export-lora -m "$W/base-f16.gguf" -o "$W/merged-f16.gguf" --lora "$W/lora-f16.gguf"
+          ./build/bin/llama-quantize "$W/merged-f16.gguf" "$W/nullified-coder.${{ inputs.quant }}.gguf" "${{ inputs.quant }}"
+          ls -lh "$W"/*.gguf
+      - name: upload GGUF to Hugging Face
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+          t = os.environ["HF_TOKEN"]; w = os.environ["W"]
+          api = HfApi(token=t)
+          repo = f"{api.whoami()['name']}/${{ inputs.out_repo }}"
+          api.create_repo(repo, repo_type="model", exist_ok=True)
+          fn = f"nullified-coder.${{ inputs.quant }}.gguf"
+          api.upload_file(path_or_fileobj=f"{w}/{fn}", path_in_repo=fn, repo_id=repo, repo_type="model")
+          print("GGUF uploaded ->", repo)
+          PY
