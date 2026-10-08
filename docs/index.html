@@ -110,6 +110,22 @@
 
   <section id="teach">
     <div class="panel">
+      <h3 style="margin:0 0 4px">Train from your own repos (only these)</h3>
+      <p class="meta" style="margin:0">Paste GitHub repos that are Fabric 1.21.x mods. It collects <strong>only these</strong>
+        into a named batch — nothing else — so you can train a model on just them.</p>
+      <label for="repoList">Repos</label>
+      <textarea id="repoList" placeholder="owner/mod-a, owner/mod-b   (or full https://github.com/owner/repo URLs, one per line)"></textarea>
+      <label for="repoBatch">Batch name</label>
+      <input id="repoBatch">
+      <div class="row">
+        <div><label for="repoVerify">Verify each builds</label>
+          <select id="repoVerify"><option value="false">Faster (skip compile)</option><option value="true">Verified (compile each)</option></select></div>
+      </div>
+      <div class="actions"><button class="primary" id="repoBtn">Collect these repos</button></div>
+      <p class="hint">When it finishes, train on just this batch: in the training notebook set <code>RUNS</code> to your batch name
+        (and <code>ADAPTER_REPO</code> to a new name if you want a separate model).</p>
+    </div>
+    <div class="panel">
       <h3 style="margin:0 0 4px">Step 1: make training data overnight</h3>
       <p class="meta" style="margin:0">Teacher models write mods, every mod is compiled and booted on a real server,
         and the results are saved privately to your Hugging Face dataset <code>nullified-ai-data</code>.</p>
@@ -367,6 +383,24 @@
   const teaches = () => store.json("nai.teach", []);
   const saveTeaches = (t) => store.set("nai.teach", JSON.stringify(t.slice(0, 20)));
 
+  // ---- Train from your own repos: collect ONLY the repos you enter into a named batch ----
+  $("repoBatch").value = "myrepos-" + today;
+  $("repoBtn").addEventListener("click", async () => {
+    const run = $("repoBatch").value.trim().replace(/[^\w.-]/g, "-");
+    const repos = $("repoList").value.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean)
+      .map((s) => s.replace(/^https?:\/\/github\.com\//i, "").replace(/\.git$/, "").replace(/\/$/, ""))
+      .filter((s) => /^[\w.-]+\/[\w.-]+$/.test(s));
+    if (!run || !repos.length) { alert("Enter a batch name and at least one owner/repo."); return; }
+    if (teaches().some((t) => t.run === run) && !confirm(`"${run}" was used before - its data would be overwritten. Continue?`)) return;
+    $("repoBtn").disabled = true;
+    try {
+      await dispatch("collect-mods.yml", { run, repos: repos.join(","), max_repos: String(repos.length), build: $("repoVerify").value });
+      const list = teaches(); list.unshift({ run, created: Date.now(), kind: "repos" }); saveTeaches(list);
+      renderTeach(); pollTeach();
+    } catch (e) { alert(e.message); }
+    $("repoBtn").disabled = false;
+  });
+
   $("teachBtn").addEventListener("click", async () => {
     const run = $("runName").value.trim().replace(/[^\w.-]/g, "-");
     if (!run) return;
@@ -391,7 +425,9 @@
     const list = teaches();
     for (const t of list.filter((x) => !x.final)) {
       try {
-        if (!t.runId) { const run = await findRun("teach.yml", (title) => title === `teach ${t.run}`); if (run) t.runId = run.id; }
+        const wf = t.kind === "repos" ? "collect-mods.yml" : "teach.yml";
+        const titlePrefix = t.kind === "repos" ? "collect " : "teach ";
+        if (!t.runId) { const run = await findRun(wf, (title) => title === titlePrefix + t.run); if (run) t.runId = run.id; }
         if (!t.runId) { t.view = `<div class="status"><span class="dot run"></span>Waiting for GitHub to start it…</div>`; continue; }
         const run = await gh(`/repos/${cfg().repo}/actions/runs/${t.runId}`);
         const jobs = (await gh(`/repos/${cfg().repo}/actions/runs/${t.runId}/jobs`)).jobs || [];
