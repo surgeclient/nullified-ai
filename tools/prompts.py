@@ -153,6 +153,16 @@ MIGRATIONS = [
      "recipe code and ship the JSON file instead."),
     (["InteractionResultHolder"],
      "`InteractionResultHolder` does not exist. `Item.use(...)` returns a plain `InteractionResult`."),
+    (["register(Identifier,Item)", "register(Identifier,Block)", "register(Identifier,", "DefaultedRegistry"],
+     "Don't call `BuiltInRegistries.ITEM.register(id, item)` - that method form does not exist. Register with the "
+     "static helper and a ResourceKey:\n"
+     "  ResourceKey<Item> key = ResourceKey.create(Registries.ITEM, id);\n"
+     "  Item ruby = Registry.register(BuiltInRegistries.ITEM, key, new Item(new Item.Properties().setId(key)));\n"
+     "Imports: net.minecraft.core.Registry, net.minecraft.core.registries.BuiltInRegistries, "
+     "net.minecraft.core.registries.Registries, net.minecraft.resources.ResourceKey, net.minecraft.resources.Identifier."),
+    (["RUBY_BLOCK", "ModBlocks", "ModItems"],
+     "Only create what the request asks for. If you reference a helper class (ModBlocks/ModItems/...) you must also "
+     "create that file; for a single item, just register it directly - do not invent blocks or classes that weren't asked for."),
 ]
 
 
